@@ -1,0 +1,57 @@
+{
+  // Dev Container for the Code Factory worker image.
+  //
+  // Same Dockerfile target as compose and CI: an isolated non-root container with
+  // the checksum-pinned agent/development toolchain already converged by
+  // `./factory apply --config containers/factory.container.yml`.
+  //
+  // Not provided, by design: systemd, user-manager linger, SSH server, Tailscale
+  // and the XFCE/TigerVNC/noVNC desktop. Those are native host capabilities
+  // provisioned by ansible/**.
+  "name": "Code Factory worker",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile",
+    "target": "worker",
+    "args": {
+      "FACTORY_USER": "coder",
+      "FACTORY_UID": "1000",
+      "FACTORY_GID": "1000",
+      "FACTORY_HOME": "/home/coder",
+      "FACTORY_WORKSPACE": "/home/coder/Dev"
+    }
+  },
+  "containerUser": "coder",
+  "remoteUser": "coder",
+  "updateRemoteUserUID": false,
+  "overrideCommand": true,
+  "init": true,
+
+  // A named volume never exposes Git/Docker-ignored host checkout files.
+  // Clone projects here after authenticating inside the container. The filtered
+  // Code Factory source snapshot remains available at /opt/code-factory.
+  "workspaceMount": "source=code-factory-dev-workspace,target=/home/coder/Dev,type=volume",
+  "workspaceFolder": "/home/coder/Dev",
+  "mounts": [],
+
+  // Bounded resources; never --privileged, --pid=host or --network=host.
+  "runArgs": [
+    "--memory=6g",
+    "--memory-swap=6g",
+    "--cpus=4",
+    "--pids-limit=4096",
+    "--shm-size=512m",
+    "--cap-drop=NET_RAW"
+  ],
+
+  "containerEnv": {
+    "CODE_FACTORY_ROOT": "/opt/code-factory",
+    "CODE_FACTORY_CONFIG": "/opt/code-factory/containers/factory.container.yml"
+  },
+
+  // Version probes only: no agent login, no first-run profile creation, no
+  // service start. Run tests/container-smoke.sh for the full behavior smoke.
+  "postCreateCommand": "herdr --version && node --version && bun --version && uv --version",
+
+  "features": {}
+}

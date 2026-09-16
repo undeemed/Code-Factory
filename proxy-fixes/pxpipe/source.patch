@@ -1,0 +1,131 @@
+diff --git a/src/core/transform.ts b/src/core/transform.ts
+index 82f5fef..ff5ad17 100644
+--- a/src/core/transform.ts
++++ b/src/core/transform.ts
+@@ -2101,6 +2101,27 @@ export async function transformRequest(
+     return { body, info };
+   }
+ 
++  // Preserved thinking signs the system, tools and preceding messages, not
++  // just the opaque thinking block. Rewriting any prefix breaks continuation.
++  // Protect the first thinking-enabled request too: its response will be bound
++  // to this prefix before the client has any signed blocks to echo.
++  const thinking = req?.thinking;
++  const thinkingEnabled = thinking !== null && typeof thinking === 'object'
++    && (('type' in thinking && (thinking.type === 'adaptive' || thinking.type === 'enabled'))
++      || 'block_binding' in thinking);
++  const carriesThinking = Array.isArray(req?.messages) && req.messages.some((message) => {
++    // Reasoning is opaque input, outside the transformer's text/image model.
++    const content: unknown = message?.content;
++    return Array.isArray(content) && content.some((block: unknown) =>
++      block !== null && typeof block === 'object' && 'type' in block
++      && (block.type === 'thinking' || block.type === 'redacted_thinking'),
++    );
++  });
++  if (thinkingEnabled || carriesThinking) {
++    info.reason = 'preserved_thinking_context';
++    return { body, info };
++  }
++
+   // Price the caller's OWN images before we rewrite anything: they occupy the
+   // same wire cap we are about to spend from. Counted once, here, because every
+   // later path (slab, tool_results, history) rewrites content in place.
+diff --git a/tests/preserved-thinking.test.ts b/tests/preserved-thinking.test.ts
+new file mode 100644
+index 0000000..d295fff
+--- /dev/null
++++ b/tests/preserved-thinking.test.ts
+@@ -0,0 +1,93 @@
++import { describe, expect, it } from 'vitest';
++import { transformAnthropicMessages } from '../src/core/library.js';
++import { createProxy } from '../src/core/proxy.js';
++
++const system = Array.from({ length: 500 }, (_, i) =>
++  `Rule ${i}: Preserve customer_${i} identifiers and return the original record without changing its sequence.`,
++).join('\n');
++
++function request(extra: Record<string, unknown> = {}) {
++  return {
++    model: 'claude-fable-5-1',
++    system,
++    messages: [{ role: 'user', content: 'Continue with the next record.' }],
++    ...extra,
++  };
++}
++
++async function transform(body: Record<string, unknown>) {
++  const original = new TextEncoder().encode(JSON.stringify(body, null, 2));
++  const result = await transformAnthropicMessages({
++    body: original,
++    model: 'claude-fable-5-1',
++    options: { charsPerToken: 1 },
++  });
++  return { original, result };
++}
++
++describe('preserved thinking context', () => {
++  it('does not rewrite the first adaptive-thinking request before signatures exist', async () => {
++    const { original, result } = await transform(request({ thinking: { type: 'adaptive' } }));
++    expect(Buffer.from(result.body).equals(original)).toBe(true);
++    expect(result.applied).toBe(false);
++  });
++
++  it('also protects explicitly enabled thinking before the first response', async () => {
++    const { original, result } = await transform(request({ thinking: { type: 'enabled', budget_tokens: 4096 } }));
++    expect(Buffer.from(result.body).equals(original)).toBe(true);
++    expect(result.applied).toBe(false);
++  });
++
++  it.each([
++    { type: 'thinking', thinking: '', signature: 'synthetic-omitted-signature' },
++    { type: 'redacted_thinking', data: 'synthetic-opaque-data' },
++  ])('preserves the entire prefix around $type, even without a thinking parameter', async (block) => {
++    const { original, result } = await transform(request({
++      messages: [
++        { role: 'user', content: 'Inspect the synthetic record.' },
++        { role: 'assistant', content: [block, { type: 'tool_use', id: 'tool_1', name: 'lookup', input: { id: 1 } }] },
++        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'record available' }] },
++      ],
++    }));
++    expect(Buffer.from(result.body).equals(original)).toBe(true);
++    expect(result.cache.ownsCacheControl).toBe(false);
++  });
++
++  it('still compresses eligible requests that do not use thinking', async () => {
++    const { original, result } = await transform(request());
++    expect(result.applied).toBe(true);
++    expect(Buffer.from(result.body).equals(original)).toBe(false);
++  });
++
++  it('forwards protected bytes and the binding beta through the HTTP entrypoint', async () => {
++    const input = JSON.stringify(request({
++      thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
++    }), null, 2);
++    const beta = 'thinking-binding-controls-2026-08-01';
++    const realFetch = globalThis.fetch;
++    let forwardedBody: string | undefined;
++    let forwardedBeta: string | null | undefined;
++    globalThis.fetch = (async (resource: Request | string | URL, init?: RequestInit) => {
++      const outgoing = resource instanceof Request ? resource : new Request(resource, init);
++      forwardedBody = await outgoing.text();
++      forwardedBeta = outgoing.headers.get('anthropic-beta');
++      return new Response(JSON.stringify({
++        id: 'synthetic-response', type: 'message', role: 'assistant',
++        content: [{ type: 'text', text: 'ok' }],
++        usage: { input_tokens: 1, output_tokens: 1 },
++      }), { headers: { 'content-type': 'application/json' } });
++    }) as typeof fetch;
++    try {
++      const handle = createProxy({ transform: { charsPerToken: 1 } });
++      const response = await handle(new Request('http://localhost/v1/messages', {
++        method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-beta': beta }, body: input,
++      }));
++      await response.text();
++      expect(response.status).toBe(200);
++      expect(forwardedBody === input).toBe(true);
++      expect(forwardedBeta).toBe(beta);
++    } finally {
++      globalThis.fetch = realFetch;
++    }
++  });
++});

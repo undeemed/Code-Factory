@@ -1,0 +1,160 @@
+---
+# Optional review desktop: XFCE on TigerVNC, reached through noVNC.
+#
+# Both listeners bind loopback. RFB also requires an operator-created password:
+# loopback is shared by local accounts, so SSH tunneling alone is not authentication.
+# No password, TLS key, tailnet identity, or browser login is exported.
+#
+# Exactly one browser profile exists, ~/.vnc-chrome-profile. Nothing here
+# copies, seeds, clones or multiplies profiles, and no per-agent desktop
+# allocator, display range, registry or wall is reproduced.
+
+- name: Install the desktop packages
+  ansible.builtin.apt:
+    name: "{{ factory_desktop_packages }}"
+    state: present
+  become: true
+  become_user: root
+
+- name: Check for an installed Chrome binary
+  ansible.builtin.stat:
+    path: /usr/bin/google-chrome
+    get_checksum: false
+  register: factory_desktop_chrome
+  changed_when: false
+  check_mode: false
+
+- name: Report a desktop without a browser
+  ansible.builtin.debug:
+    msg: >-
+      /usr/bin/google-chrome is absent, so {{ factory_local_bin }}/vnc-chrome
+      cannot start anything yet. factory_chrome_install is
+      "{{ factory_chrome_install }}"; set it to auto or true to install Chrome
+      from Google's apt repository.
+  when: not factory_desktop_chrome.stat.exists
+
+- name: Ensure the VNC configuration directory
+  ansible.builtin.file:
+    path: "{{ factory_vnc_dir }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0700"
+  become: true
+
+- name: Inspect the operator-created VNC credential without reading its value
+  ansible.builtin.stat:
+    path: "{{ factory_vnc_password_file }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+  register: factory_vnc_password
+  check_mode: false
+
+- name: Require a private VNC password before enabling the desktop
+  ansible.builtin.assert:
+    that:
+      - factory_vnc_password.stat.exists | default(false)
+      - factory_vnc_password.stat.isreg | default(false)
+      - not (factory_vnc_password.stat.islnk | default(false))
+      - (factory_vnc_password.stat.uid | default(-1) | int) == (factory_user_uid | int)
+      - (factory_vnc_password.stat.mode | default('')) == '0600'
+    fail_msg: >-
+      Desktop authentication is not configured. As {{ factory_cfg.user }}, run
+      tigervncpasswd {{ factory_vnc_password_file }}, then chmod 600 that file
+      and rerun apply. No desktop listener has been enabled by this task.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Render the VNC session startup script
+  ansible.builtin.template:
+    src: vnc-xstartup.j2
+    dest: "{{ factory_vnc_dir }}/xstartup"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+  notify: vnc restart required
+
+
+# The single persistent profile. Created empty if it does not exist and never
+# touched again: no seed profile is copied in and its contents are not managed.
+- name: Ensure the one persistent VNC Chrome profile directory exists
+  ansible.builtin.file:
+    path: "{{ factory_vnc_chrome_profile }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0700"
+  become: true
+
+- name: Install the persistent-profile browser launcher
+  ansible.builtin.template:
+    src: vnc-chrome.j2
+    dest: "{{ factory_local_bin }}/vnc-chrome"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+
+- name: Render the desktop user units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ factory_user_units }}/{{ item }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop:
+    - code-factory-vnc.service
+    - code-factory-novnc.service
+  notify:
+    - reload user systemd
+    - restart novnc
+    - vnc restart required
+
+- name: Ensure the user default.target.wants directory
+  ansible.builtin.file:
+    path: "{{ factory_user_units }}/default.target.wants"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+
+- name: Statically enable the desktop user units
+  ansible.builtin.file:
+    src: "{{ factory_user_units }}/{{ item }}"
+    dest: "{{ factory_user_units }}/default.target.wants/{{ item }}"
+    state: link
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    force: true
+    follow: false
+  become: true
+  loop:
+    - code-factory-vnc.service
+    - code-factory-novnc.service
+
+- name: Enable and start the desktop user units
+  ansible.builtin.systemd_service:
+    scope: user
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_systemd_env }}"
+  loop:
+    - code-factory-vnc.service
+    - code-factory-novnc.service
+  when: factory_manage_services | bool
+
+- name: Report how to reach the desktop
+  ansible.builtin.debug:
+    msg:
+      - "VNC display :{{ factory_cfg.desktop.display }} requires VncAuth and listens only on loopback port {{ factory_vnc_rfb_port }}."
+      - "noVNC listens on 127.0.0.1:{{ factory_cfg.desktop.novnc_port }}."
+      - "From a workstation: ssh -N -L {{ factory_cfg.desktop.novnc_port }}:127.0.0.1:{{ factory_cfg.desktop.novnc_port }} {{ factory_cfg.user }}@<host>"
+      - "Then open http://127.0.0.1:{{ factory_cfg.desktop.novnc_port }}/vnc.html"
+      - "Browser sign-in happens once, by hand, in the persistent profile {{ factory_vnc_chrome_profile }} (launcher: vnc-chrome)."

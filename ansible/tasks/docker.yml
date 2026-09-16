@@ -1,0 +1,51 @@
+---
+# Docker from Ubuntu: docker.io + docker-compose-v2.
+#
+# One package family only - the source host runs Ubuntu's docker.io, so Docker
+# CE repositories are deliberately not added. No /etc/docker/daemon.json is
+# written: this playbook does not rewrite an existing engine configuration.
+#
+# Membership of the docker group is equivalent to passwordless root on the
+# host, so it is never granted implicitly. factory_docker_group_users is an
+# explicit opt-in list and is empty by default.
+
+- name: Install Docker engine and Compose v2
+  ansible.builtin.apt:
+    name: "{{ factory_docker_packages }}"
+    state: present
+  become: true
+
+- name: Enable and start the Docker services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  become: true
+  loop:
+    - containerd.service
+    - docker.service
+  when: factory_manage_services | bool
+
+- name: Report the deferred Docker start
+  ansible.builtin.debug:
+    msg: >-
+      start_services is false: docker.io and docker-compose-v2 are installed
+      but neither containerd nor dockerd is enabled or started here.
+  when: not (factory_manage_services | bool)
+
+- name: Grant docker group membership where it was explicitly requested
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  become: true
+  loop: "{{ factory_docker_group_users }}"
+
+- name: Report the docker group policy
+  ansible.builtin.debug:
+    msg: >-
+      No account was added to the docker group. Membership grants host-level
+      root through the daemon socket, so it stays opt-in: set
+      factory_docker_group_users to the accounts that need it, or use sudo for
+      docker commands.
+  when: factory_docker_group_users | length == 0

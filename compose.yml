@@ -1,0 +1,160 @@
+# Code Factory compose stack.
+#
+#   docker compose --profile worker up -d            # isolated non-root worker
+#   docker compose --profile worker --profile data up -d   # + example backing services
+#
+# Everything here is opt-in through profiles: nothing starts with a bare
+# `docker compose up`. The worker is the same image the devcontainer and CI use.
+#
+# Security boundary (see docs/security.md):
+#   * no privileged containers, no host PID/IPC/network namespaces
+#   * no host Docker socket, no bind of host home, credentials or browser profiles
+#   * published ports are loopback-only; service-to-service traffic uses the
+#     project network by DNS name (postgres, redis) and needs no host port at all
+#   * the PostgreSQL password is a file secret outside the source checkout
+#     (no baked default password and no password in this file or environment)
+#
+# Image digests verified 2026-09-15 against registry-1.docker.io:
+#   postgres:18-bookworm  sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+#                         (amd64 sha256:a10c981235b4f635e65df0cfb66a5598064628128505dbc6a3ed4ca303717521,
+#                          PG_VERSION=18.6-1.pgdg12+2, created 2026-08-25)
+#   redis:8-alpine        sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
+#                         (amd64 sha256:9c3ecc609a8087c0f11c494fefaf37a8f7bf9a967631d4a0da8967a9810be354,
+#                          REDIS_VERSION=8.10.1, created 2026-08-18)
+#
+# Copy containers/worker.env.example to .env (ignored) to override the defaults.
+
+name: code-factory
+
+services:
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+      args:
+        FACTORY_USER: ${FACTORY_USER:-coder}
+        FACTORY_UID: ${FACTORY_UID:-1000}
+        FACTORY_GID: ${FACTORY_GID:-1000}
+        FACTORY_HOME: ${FACTORY_HOME:-/home/coder}
+        FACTORY_WORKSPACE: ${FACTORY_WORKSPACE:-/home/coder/Dev}
+    image: code-factory/worker:${CODE_FACTORY_TAG:-dev}
+    # PID 1 reaper only: this is signal handling, not an init system. The image
+    # has no systemd, no user manager and no linger.
+    init: true
+    command: ["sleep", "infinity"]
+    working_dir: ${FACTORY_WORKSPACE:-/home/coder/Dev}
+    environment:
+      CODE_FACTORY_CONFIG: /opt/code-factory/containers/factory.container.yml
+      CODE_FACTORY_ROOT: /opt/code-factory
+    volumes:
+      - workspace:${FACTORY_WORKSPACE:-/home/coder/Dev}
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g,mode=1777
+    networks: [factory]
+    # Bounded resources: a runaway build or agent cannot exhaust the host.
+    cpus: "${WORKER_CPUS:-4}"
+    mem_limit: ${WORKER_MEMORY:-6g}
+    memswap_limit: ${WORKER_MEMORY:-6g}
+    mem_reservation: ${WORKER_MEMORY_RESERVATION:-1g}
+    pids_limit: ${WORKER_PIDS:-4096}
+    shm_size: ${WORKER_SHM:-512m}
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 16384
+    cap_drop: ["NET_RAW"]
+    # `no-new-privileges` is deliberately NOT set on the worker: ansible become
+    # for a second convergence pass goes through setuid sudo inside the container.
+    # The backing services below do set it, since their entrypoints drop
+    # privileges from root instead of escalating.
+    stop_grace_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Optional development backing services. These are generic examples for local
+  # work, NOT a reproduction of any captured application deployment: empty
+  # volumes, no imported data, no application schema, no production topology.
+  # ---------------------------------------------------------------------------
+  postgres:
+    profiles: ["data"]
+    image: postgres:18-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    init: true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-developer}
+      POSTGRES_DB: ${POSTGRES_DB:-developer}
+      # No POSTGRES_PASSWORD here by design; the value is read from the secret file.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    secrets:
+      - postgres_password
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks: [factory]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"${POSTGRES_USER:-developer}\" -d \"${POSTGRES_DB:-developer}\" -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    cpus: "${POSTGRES_CPUS:-1}"
+    mem_limit: ${POSTGRES_MEMORY:-1g}
+    memswap_limit: ${POSTGRES_MEMORY:-1g}
+    pids_limit: ${POSTGRES_PIDS:-512}
+    shm_size: 256m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
+    restart: unless-stopped
+
+  redis:
+    profiles: ["data"]
+    image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
+    init: true
+    command:
+      - "redis-server"
+      - "--save"
+      - "300 10"
+      - "--appendonly"
+      - "no"
+      - "--maxmemory"
+      - "${REDIS_MAXMEMORY:-256mb}"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+    networks: [factory]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    cpus: "${REDIS_CPUS:-1}"
+    mem_limit: ${REDIS_MEMORY:-512m}
+    memswap_limit: ${REDIS_MEMORY:-512m}
+    pids_limit: ${REDIS_PIDS:-256}
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
+    restart: unless-stopped
+
+networks:
+  factory:
+    driver: bridge
+
+volumes:
+  workspace:
+  postgres-data:
+  redis-data:
+
+secrets:
+  postgres_password:
+    # Keep credentials outside the checkout: Git/Docker ignores do not protect
+    # an editor's runtime workspace bind. Override this directory explicitly
+    # when invoking Compose through sudo so HOME cannot change its meaning.
+    file: "${CODE_FACTORY_SECRET_DIR:-${HOME}/.local/state/code-factory/secrets}/postgres_password"

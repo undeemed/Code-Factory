@@ -1,0 +1,288 @@
+# Continuous integration for Code Factory.
+#
+# Runs the repository's real interfaces: locked Python dependency sync, the
+# project's own lint/test commands, schema validation of both configuration
+# documents through `./factory validate`, and a full worker image build plus the
+# behavior smoke in tests/container-smoke.sh.
+#
+# Supply chain: least-privilege token, no write permissions anywhere, and every
+# third-party action pinned to an immutable commit SHA (verified 2026-09-15 via
+# api.github.com):
+#   actions/checkout    v7.0.1  -> 3d3c42e5aac5ba805825da76410c181273ba90b1
+#   astral-sh/setup-uv  v10.1.0 -> bec219d24cd3e171d82865faccec33120bb574f4 (immutable release)
+# uv itself is not pinned here: the version is read from toolchain.lock.json
+# (tools.uv.version), the same pin ./bootstrap.sh installs, so the CI runner and
+# the image can never drift apart.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default; no job requests more.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  config-and-python:
+    name: configuration and python checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the uv version pinned by the toolchain lock
+        id: uv
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.tools.uv.version' toolchain.lock.json)
+          printf 'version=%s\n' "${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ steps.uv.outputs.version }}
+          enable-cache: true
+
+      - name: Sync locked dependencies
+        run: uv sync --locked --group dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Python tests
+        run: uv run pytest
+
+      - name: Validate default configuration
+        run: ./factory validate --config config/default.yml
+
+      - name: Validate container configuration
+        run: ./factory validate --config containers/factory.container.yml
+
+  container-smoke:
+    name: worker image behavior smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DOCKER_BUILDKIT: "1"
+      COMPOSE_DOCKER_CLI_BUILD: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Smoke script syntax
+        run: bash -n tests/container-smoke.sh
+
+      - name: Audit image pins in the Dockerfile
+        run: |
+          set -euo pipefail
+          python3 - Dockerfile <<'PY'
+          import re
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8").read()
+          args = dict(re.findall(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)", text, re.M))
+
+          def expand(ref):
+              return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: args.get(m.group(1), ""), ref)
+
+          stages, problems = set(), []
+          for line in text.splitlines():
+              match = re.match(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+[Aa][Ss]\s+(\S+))?", line)
+              if not match:
+                  continue
+              ref, alias = expand(match.group(1)), match.group(2)
+              if ref not in stages and "@sha256:" not in ref:
+                  problems.append(f"FROM {ref} is neither a previous stage nor digest-pinned")
+              if alias:
+                  stages.add(alias)
+
+          if not stages:
+              problems.append("no build stage found; the audit would pass vacuously")
+          if problems:
+              print("Dockerfile audit failed:")
+              for problem in problems:
+                  print(f"  - {problem}")
+              raise SystemExit(1)
+
+          print("Dockerfile audit passed for stages: " + ", ".join(sorted(stages)))
+          PY
+
+      - name: Audit the devcontainer definition
+        run: |
+          set -euo pipefail
+          python3 - .devcontainer/devcontainer.json <<'PY'
+          import json
+          import sys
+
+          raw = open(sys.argv[1], encoding="utf-8").read()
+
+          # devcontainer.json is JSONC: drop comments that are not inside strings.
+          out, index, in_string = [], 0, False
+          while index < len(raw):
+              char = raw[index]
+              if in_string:
+                  out.append(char)
+                  if char == "\\" and index + 1 < len(raw):
+                      out.append(raw[index + 1])
+                      index += 2
+                      continue
+                  in_string = char != '"'
+                  index += 1
+                  continue
+              if char == '"':
+                  in_string = True
+                  out.append(char)
+                  index += 1
+                  continue
+              if raw.startswith("//", index):
+                  while index < len(raw) and raw[index] != "\n":
+                      index += 1
+                  continue
+              if raw.startswith("/*", index):
+                  end = raw.find("*/", index + 2)
+                  index = len(raw) if end < 0 else end + 2
+                  continue
+              out.append(char)
+              index += 1
+
+          doc = json.loads("".join(out))
+          problems = []
+
+          if doc.get("build", {}).get("target") != "worker":
+              problems.append("build.target must be the worker stage")
+          for key in ("containerUser", "remoteUser"):
+              if doc.get(key) in (None, "root"):
+                  problems.append(f"{key} must name the non-root factory account")
+
+          run_args = doc.get("runArgs", [])
+          forbidden = ("--privileged", "--pid=host", "--network=host", "--ipc=host", "--userns=host")
+          for arg in run_args:
+              if arg in forbidden or arg.startswith(("--volume", "-v", "--device", "--mount")):
+                  problems.append(f"runArgs entry {arg!r} breaks the container boundary")
+          for cap in ("--memory=", "--cpus=", "--pids-limit="):
+              if not any(arg.startswith(cap) for arg in run_args):
+                  problems.append(f"runArgs is missing a {cap.rstrip('=')} cap")
+
+          for mount in doc.get("mounts", []):
+              problems.append(f"unexpected extra mount {mount!r}")
+
+          workspace_mount = doc.get("workspaceMount", "")
+          if "type=volume" not in workspace_mount or "type=bind" in workspace_mount or "${localWorkspaceFolder}" in workspace_mount:
+              problems.append("workspaceMount must be a named volume, not a host checkout bind")
+
+          if problems:
+              print("devcontainer audit failed:")
+              for problem in problems:
+                  print(f"  - {problem}")
+              raise SystemExit(1)
+
+          print(f"devcontainer audit passed: {doc.get('name')!r} -> {doc['build']['target']} stage")
+          PY
+
+      - name: Create throwaway compose secret
+        run: |
+          set -euo pipefail
+          secret_dir="$RUNNER_TEMP/code-factory-secrets"
+          install -d -m 700 "$secret_dir"
+          echo "CODE_FACTORY_SECRET_DIR=$secret_dir" >> "$GITHUB_ENV"
+          umask 077
+          openssl rand -base64 32 | tr -d '\n' > "$secret_dir/postgres_password"
+
+      - name: Render and audit compose definitions
+        run: |
+          set -euo pipefail
+          docker compose --profile worker --profile data config --format json > /tmp/compose-rendered.json
+          python3 - /tmp/compose-rendered.json <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              doc = json.load(fh)
+
+          problems = []
+          for name, svc in sorted(doc.get("services", {}).items()):
+              if svc.get("privileged"):
+                  problems.append(f"{name}: privileged container")
+              if svc.get("network_mode") == "host":
+                  problems.append(f"{name}: host network namespace")
+              if svc.get("pid") == "host":
+                  problems.append(f"{name}: host PID namespace")
+              if svc.get("ipc") == "host":
+                  problems.append(f"{name}: host IPC namespace")
+              if not svc.get("build") and "@sha256:" not in str(svc.get("image", "")):
+                  problems.append(f"{name}: image is not digest-pinned ({svc.get('image')!r})")
+
+              for volume in svc.get("volumes", []):
+                  if isinstance(volume, dict):
+                      vtype, source = volume.get("type"), str(volume.get("source", ""))
+                  else:
+                      parts = str(volume).split(":")
+                      vtype = "bind" if parts[0].startswith(("/", ".", "~")) else "volume"
+                      source = parts[0]
+                  if vtype == "bind":
+                      problems.append(f"{name}: host bind mount {source}")
+                  if "docker.sock" in source:
+                      problems.append(f"{name}: docker socket mount {source}")
+
+              for port in svc.get("ports", []):
+                  host_ip = port.get("host_ip") if isinstance(port, dict) else None
+                  if host_ip not in ("127.0.0.1", "::1"):
+                      problems.append(f"{name}: port published on {host_ip or 'all interfaces'}")
+
+              limits = {
+                  "mem_limit": svc.get("mem_limit"),
+                  "cpus": svc.get("cpus") or svc.get("deploy", {}).get("resources", {}).get("limits", {}).get("cpus"),
+                  "pids_limit": svc.get("pids_limit"),
+              }
+              missing = [key for key, value in limits.items() if not value]
+              if missing:
+                  problems.append(f"{name}: missing resource caps {missing}")
+
+          for secret_name, secret in sorted(doc.get("secrets", {}).items()):
+              if "environment" in secret:
+                  problems.append(f"secret {secret_name}: sourced from the environment, expected a file")
+
+          if problems:
+              print("compose audit failed:")
+              for problem in problems:
+                  print(f"  - {problem}")
+              raise SystemExit(1)
+
+          print(f"compose audit passed for {len(doc.get('services', {}))} service(s)")
+          PY
+
+      - name: Build worker image
+        run: docker build --target worker --tag code-factory/worker:ci .
+
+      - name: Behavior smoke in the worker image
+        env:
+          CF_SMOKE_MEMORY: 6g
+          CF_SMOKE_CPUS: 2
+          CF_SMOKE_TIMEOUT: "2700"
+        run: tests/container-smoke.sh
+
+      - name: Remove throwaway secret and images
+        if: always()
+        run: |
+          rm -rf "${RUNNER_TEMP:?}/code-factory-secrets"
+          docker image rm -f code-factory/worker:ci >/dev/null 2>&1 || true

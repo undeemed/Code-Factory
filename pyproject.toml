@@ -1,0 +1,26 @@
+[project]
+name = "code-factory"
+version = "1.0.0"
+description = "Repeatable Herdr development host provisioning"
+requires-python = ">=3.12"
+dependencies = [
+  "ansible-core==2.21.4",
+  "jsonschema==4.26.0",
+  "PyYAML==6.0.3",
+]
+
+[dependency-groups]
+dev = ["pytest==9.0.2", "ruff==0.16.3"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

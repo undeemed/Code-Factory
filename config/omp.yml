@@ -1,0 +1,56 @@
+modelRoles:
+  designer: kimi-code/k3:max
+  smol: openai-codex/gpt-5.6-terra:xhigh
+  slow: anthropic/claude-fable-5-1:xhigh
+  vision: openai-codex/gpt-6-astra:xhigh
+  plan: anthropic/claude-fable-5-1:xhigh
+  commit: xiaomi/mimo-v2.5-pro-ultraspeed
+  tiny: openai-codex/gpt-5.6-luna
+  advisor: anthropic/claude-fable-5-1
+  Kimi: kimi-code/k3
+  task: anthropic/claude-opus-5:xhigh
+  subagent: anthropic/claude-opus-5:xhigh
+  default: anthropic/claude-opus-5:xhigh
+theme:
+  dark: dark-rose-pine
+symbolPreset: nerd
+defaultThinkingLevel: auto
+hideThinkingBlock: false
+autocompleteMaxVisible: 10
+steeringMode: one-at-a-time
+interruptMode: immediate
+includeModelInPrompt: false
+readLineNumbers: true
+omitThinking: true
+textVerbosity: low
+cycleOrder:
+- smol
+- default
+- slow
+- subagent
+colorBlindMode: false
+statusLine:
+  preset: custom
+  compactThinkingLevel: true
+  leftSegments:
+  - path
+  - git
+  - model
+  - mode
+  rightSegments:
+  - context_pct
+  - token_rate
+  - subagents
+  - cost
+  - time_spent
+  segmentOptions:
+    model:
+      showThinkingLevel: true
+    git:
+      showBranch: true
+  showHookStatus: true
+  sessionAccent: false
+  separator: powerline
+  transparent: true
+composer:
+  shape: borderless

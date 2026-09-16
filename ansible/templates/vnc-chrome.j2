@@ -1,0 +1,50 @@
+#!/bin/sh
+{{ ansible_managed | comment }}
+# Launch the review desktop browser.
+#
+# This desktop has exactly ONE persistent Chrome profile and this launcher is
+# the only supported way to open it. Do not copy it, do not trim its cookie
+# store into a "clean" duplicate, do not create throwaway profiles, and do not
+# delete it. Copies fragment session state, strand logins in the wrong profile
+# and leave duplicate credential stores on disk.
+#
+# Signed in as the wrong account? Sign out inside this profile and sign back in
+# inside this same profile. Need a session that must not persist? Pass
+# --incognito, which opens a private window in this same profile.
+
+set -eu
+
+# The one profile this desktop owns, as provisioned. Not $HOME-relative, so a
+# stray HOME cannot silently point the browser at a second profile.
+PROFILE="{{ factory_vnc_chrome_profile }}"
+DISPLAY="${DISPLAY:-:{{ factory_cfg.desktop.display }}}"
+export DISPLAY
+
+for arg in "$@"; do
+    case "$arg" in
+        --user-data-dir|--user-data-dir=*|--profile-directory|--profile-directory=*)
+            echo "vnc-chrome: refusing $arg." >&2
+            echo "vnc-chrome: this desktop drives exactly one profile, $PROFILE." >&2
+            echo "vnc-chrome: for a non-persistent session use --incognito instead." >&2
+            exit 64
+            ;;
+    esac
+done
+
+if [ ! -x /usr/bin/google-chrome ]; then
+    echo "vnc-chrome: /usr/bin/google-chrome is not installed." >&2
+    echo "vnc-chrome: re-run provisioning with factory_chrome_install=true." >&2
+    exit 69
+fi
+
+if [ ! -d "$PROFILE" ]; then
+    echo "vnc-chrome: $PROFILE is missing; re-run provisioning with the desktop profile enabled." >&2
+    exit 69
+fi
+
+exec /usr/bin/google-chrome \
+    --user-data-dir="$PROFILE" \
+    --profile-directory=Default \
+    --no-first-run \
+    --no-default-browser-check \
+    "$@"

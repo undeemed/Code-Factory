@@ -1,0 +1,235 @@
+---
+# Target account, home layout and (optionally) the user manager.
+#
+# Conservative by design: an account that already exists is never re-homed,
+# re-shelled, re-grouped or given new privileges. Modes of pre-existing
+# standard directories are left alone - `mode` is only set where this playbook
+# owns the directory outright.
+
+- name: Reject unsafe home paths before privileged account operations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import os, pathlib, stat, sys
+        home = pathlib.Path(sys.argv[1])
+        for parent in home.parents:
+            info = parent.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                sys.exit("Home ancestors must be real root-owned, non-writable directories: " + str(parent))
+        try:
+            info = home.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISDIR(info.st_mode):
+                sys.exit("Home must be a real directory, not a symlink")
+      - "{{ factory_cfg.home }}"
+  changed_when: false
+  check_mode: false
+
+- name: Look up the target account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ factory_cfg.user }}"
+    fail_key: false
+  check_mode: false
+
+- name: Record whether the target account already exists
+  ansible.builtin.set_fact:
+    factory_user_exists: >-
+      {{ ((ansible_facts.getent_passwd | default({})).get(factory_cfg.user) | default(none)) is not none }}
+    factory_account_entry: >-
+      {{ (ansible_facts.getent_passwd | default({})).get(factory_cfg.user) | default([]) }}
+
+- name: Assert an existing account already uses the configured home
+  ansible.builtin.assert:
+    that:
+      - (factory_account_entry[4] | default('')) == factory_cfg.home
+    fail_msg: >-
+      Account {{ factory_cfg.user }} exists with home
+      {{ factory_account_entry[4] | default('(unknown)') }} but the
+      configuration asks for {{ factory_cfg.home }}. Moving or rewriting an
+      existing account is refused; fix factory.home or the account first.
+    quiet: true
+  when: factory_user_exists | bool
+
+- name: Create the target group
+  ansible.builtin.group:
+    name: "{{ factory_cfg.user }}"
+    state: present
+  become: true
+  when:
+    - not (factory_user_exists | bool)
+    - factory_create_user | bool
+
+- name: Create the target account
+  ansible.builtin.user:
+    name: "{{ factory_cfg.user }}"
+    group: "{{ factory_cfg.user }}"
+    home: "{{ factory_cfg.home }}"
+    shell: "{{ factory_user_shell }}"
+    create_home: true
+    state: present
+  become: true
+  when:
+    - not (factory_user_exists | bool)
+    - factory_create_user | bool
+
+- name: Fail when the account is absent and creation is disabled
+  ansible.builtin.assert:
+    that:
+      - (factory_user_exists | bool) or (factory_create_user | bool)
+    fail_msg: >-
+      Account {{ factory_cfg.user }} does not exist and factory_create_user is
+      false. Create the account first or allow this playbook to create it.
+    quiet: true
+
+- name: Resolve the account uid
+  ansible.builtin.command:
+    argv: [id, -u, "{{ factory_cfg.user }}"]
+  register: factory_uid_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Resolve the account primary group
+  ansible.builtin.command:
+    argv: [id, -gn, "{{ factory_cfg.user }}"]
+  register: factory_gid_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Record account facts
+  ansible.builtin.set_fact:
+    factory_user_uid: "{{ (factory_uid_probe.stdout | trim) if factory_uid_probe.rc == 0 else '' }}"
+    factory_group: "{{ (factory_gid_probe.stdout | trim) if factory_gid_probe.rc == 0 else factory_cfg.user }}"
+    # False only in check mode on a host where the account does not exist yet:
+    # `./factory plan` then reports the account work and skips the file work it
+    # cannot preview, instead of failing on an unresolvable owner.
+    factory_account_ready: "{{ factory_uid_probe.rc == 0 }}"
+
+- name: Report the truncated plan when the account does not exist yet
+  ansible.builtin.debug:
+    msg: >-
+      Account {{ factory_cfg.user }} does not exist yet. In check mode the
+      per-account file, unit and toolchain steps cannot be previewed and are
+      skipped; `./factory apply` creates the account and runs them.
+  when:
+    - ansible_check_mode
+    - not (factory_account_ready | bool)
+
+- name: Add the account to sudo
+  ansible.builtin.user:
+    name: "{{ factory_cfg.user }}"
+    groups: sudo
+    append: true
+  become: true
+  when:
+    - factory_user_sudo | bool
+    - factory_account_ready | bool
+
+- name: Ensure the home directory exists and is owned by the account
+  ansible.builtin.file:
+    path: "{{ factory_cfg.home }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+  become: true
+  when: factory_account_ready | bool
+
+- name: Ensure the home layout
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  loop:
+    - "{{ factory_cfg.home }}/.config"
+    - "{{ factory_cfg.home }}/.local"
+    - "{{ factory_cfg.home }}/.local/bin"
+    - "{{ factory_cfg.home }}/.local/share"
+    - "{{ factory_cfg.home }}/.local/state"
+    - "{{ factory_share_dir }}"
+    - "{{ factory_user_units }}"
+    - "{{ factory_cfg.workspace }}"
+  when: factory_account_ready | bool
+
+- name: Keep the managed bin directory and environment on the interactive shell
+  ansible.builtin.blockinfile:
+    path: "{{ factory_cfg.home }}/.profile"
+    create: true
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+    marker: "# {mark} code-factory managed environment"
+    block: |
+      case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) PATH="$HOME/.local/bin:$PATH" ;;
+      esac
+      export PATH
+      {% if factory_cfg.profiles.agents | bool %}
+      {% for key, value in factory_managed_shell_env | dictsort %}
+      export {{ key }}="{{ value }}"
+      {% endfor %}
+      {% endif %}
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  when:
+    - factory_manage_profile_path | bool
+    - factory_account_ready | bool
+
+# --- user manager -----------------------------------------------------------
+# Skipped entirely when start_services is false (image builds, containers).
+
+- name: Enable lingering for the account
+  ansible.builtin.command:
+    argv: [loginctl, enable-linger, "{{ factory_cfg.user }}"]
+    creates: "/var/lib/systemd/linger/{{ factory_cfg.user }}"
+  become: true
+  when:
+    - factory_manage_linger | bool
+    - factory_account_ready | bool
+
+- name: Wait for the user manager D-Bus socket
+  ansible.builtin.wait_for:
+    path: "{{ factory_user_runtime_dir }}/bus"
+    timeout: 60
+  become: true
+  when:
+    - factory_manage_linger | bool
+    - factory_account_ready | bool
+    - not ansible_check_mode
+
+- name: Check for a usable user manager
+  ansible.builtin.stat:
+    path: "{{ factory_user_runtime_dir }}/bus"
+  become: true
+  register: factory_user_bus
+  check_mode: false
+  when:
+    - factory_manage_services | bool
+    - factory_account_ready | bool
+
+- name: Assert the user manager is reachable before managing user units
+  ansible.builtin.assert:
+    that:
+      - factory_user_bus.stat.exists | default(false)
+    fail_msg: >-
+      No user D-Bus at {{ factory_user_runtime_dir }}/bus, so `systemctl --user`
+      cannot be driven for {{ factory_cfg.user }}. Set factory.enable_linger to
+      true (or open a login session for the account), or set
+      factory.start_services to false for image builds - unit files are still
+      written in that mode.
+    quiet: true
+  when:
+    - factory_manage_services | bool
+    - factory_account_ready | bool
+    - not ansible_check_mode

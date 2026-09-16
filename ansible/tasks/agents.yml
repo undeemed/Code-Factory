@@ -1,0 +1,57 @@
+---
+# Agent harness preferences.
+#
+# These are sanitized preference files, not credential stores. They are written
+# once: an account that already has provider settings or an authenticated
+# harness keeps them (contract: "first-time writes only for OMP/Pi"). The
+# harness binaries themselves come from the installer's --npm set, which also
+# carries the pinned gh / no-mistakes / treehouse support binaries.
+
+- name: Ensure the harness preference directories
+  ansible.builtin.file:
+    path: "{{ item.dest | dirname }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "{{ item.dir_mode }}"
+  become: true
+  loop: "{{ factory_agent_config_files }}"
+  loop_control:
+    label: "{{ item.dest | dirname }}"
+
+- name: Check for existing harness preference files
+  ansible.builtin.stat:
+    path: "{{ item.dest }}"
+    get_checksum: false
+  become: true
+  loop: "{{ factory_agent_config_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: factory_agent_config_stat
+  changed_when: false
+  check_mode: false
+
+- name: Write harness preferences that are absent
+  ansible.builtin.copy:
+    src: "{{ code_factory_repo }}/{{ item.item.src }}"
+    dest: "{{ item.item.dest }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "{{ item.item.mode }}"
+    remote_src: true
+  become: true
+  loop: "{{ factory_agent_config_stat.results }}"
+  loop_control:
+    label: "{{ item.item.dest }}"
+  when:
+    - item.item.first_write | bool
+    - not (item.stat.exists | default(false))
+
+- name: Report harness preferences left untouched
+  ansible.builtin.debug:
+    msg: >-
+      {{ factory_agent_config_stat.results
+         | selectattr('stat.exists', 'defined')
+         | selectattr('stat.exists')
+         | map(attribute='item.dest') | list | join(', ') | default('none', true) }}
+      already exist and were not rewritten (first-write-only inputs).

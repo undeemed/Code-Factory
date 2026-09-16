@@ -1,0 +1,340 @@
+---
+# Read-only verification of what this run produced.
+#
+# Nothing here mutates the host: every command is read-only and marked
+# changed_when: false, so verification can never make a second apply report a
+# change. Individual task files already assert their own outputs; this file
+# checks the wiring that crosses them - the pinned Herdr path, the static
+# enablement symlinks, the managed shell environment, the pruner runtime, the
+# Firstmate pin and the loopback-only desktop listeners.
+#
+# A check-mode run cannot observe files it did not create, so verification
+# reports what it would check instead of failing a plan.
+
+- name: Report that check mode cannot verify provisioning outputs
+  ansible.builtin.debug:
+    msg: >-
+      check mode: skipping output verification. `./factory apply` verifies the
+      pinned Herdr path, unit wiring, pruner runtime, Firstmate pin and the
+      loopback-only desktop listeners.
+  when: ansible_check_mode or not (factory_account_ready | bool)
+
+- name: Verify provisioning outputs
+  when:
+    - not ansible_check_mode
+    - factory_account_ready | bool
+  block:
+
+    # --- files that must exist ---------------------------------------------
+
+    - name: Build the inventory of outputs this configuration must have
+      ansible.builtin.set_fact:
+        factory_expected_outputs: >-
+          {{ [factory_herdr_bin,
+              factory_local_bin ~ '/herdr',
+              factory_herdr_config,
+              factory_user_units ~ '/herdr.service',
+              factory_user_units ~ '/default.target.wants/herdr.service',
+              factory_cfg.home ~ '/.profile']
+             + ([factory_chrome_devtools_mcp_path]
+                if (factory_cfg.profiles.agents | bool) else [])
+             + ([factory_pruner_script,
+                 factory_pruner_python,
+                 factory_pruner_stamp,
+                 factory_user_units ~ '/chrome-autoprune.service',
+                 factory_user_units ~ '/chrome-autoprune.timer',
+                 factory_user_units ~ '/timers.target.wants/chrome-autoprune.timer']
+                if ((factory_cfg.profiles.agents | bool)
+                    and (factory_cfg.browser_prune.enabled | bool)) else [])
+             + ([factory_firstmate_dir ~ '/.git']
+                + (factory_firstmate_config_names
+                   | map('regex_replace', '^', factory_firstmate_dir ~ '/config/')
+                   | list)
+                if (factory_cfg.profiles.firstmate | bool) else [])
+             + ([factory_vnc_dir ~ '/xstartup',
+                 factory_vnc_password_file,
+                 factory_vnc_chrome_profile,
+                 factory_local_bin ~ '/vnc-chrome',
+                 factory_user_units ~ '/code-factory-vnc.service',
+                 factory_user_units ~ '/code-factory-novnc.service',
+                 factory_user_units ~ '/default.target.wants/code-factory-vnc.service',
+                 factory_user_units ~ '/default.target.wants/code-factory-novnc.service']
+                if (factory_cfg.profiles.desktop | bool) else []) }}
+
+    - name: Stat every expected output
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      become: true
+      loop: "{{ factory_expected_outputs }}"
+      loop_control:
+        label: "{{ item | relpath(factory_cfg.home) }}"
+      register: factory_output_stat
+      changed_when: false
+      check_mode: false
+
+    - name: Assert every expected output exists
+      ansible.builtin.assert:
+        that:
+          - factory_output_stat.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          Provisioning finished but these outputs are missing:
+          {{ factory_output_stat.results | rejectattr('stat.exists')
+             | map(attribute='item') | list | join(', ') }}.
+        quiet: true
+
+    # --- desktop units are enabled through the managed symlinks -------------
+
+    - name: Stat the desktop static-enablement symlinks
+      ansible.builtin.stat:
+        path: "{{ factory_user_units }}/default.target.wants/{{ item }}"
+        follow: false
+        get_checksum: false
+      become: true
+      loop:
+        - code-factory-vnc.service
+        - code-factory-novnc.service
+      register: factory_verify_desktop_links
+      changed_when: false
+      check_mode: false
+      when:
+        - factory_cfg.profiles.desktop | bool
+        - factory_desktop_strict_symlink_check | bool
+
+    - name: Assert the desktop units are enabled through the managed unit files
+      ansible.builtin.assert:
+        that:
+          - factory_verify_desktop_links.results
+            | map(attribute='stat.lnk_source', default='')
+            | list
+            == (['code-factory-vnc.service', 'code-factory-novnc.service']
+                | map('regex_replace', '^', factory_user_units ~ '/') | list)
+        fail_msg: >-
+          The default.target.wants entries for the desktop must be symlinks to
+          the managed units in {{ factory_user_units }}. Found:
+          {{ factory_verify_desktop_links.results
+             | map(attribute='stat.lnk_source', default='(not a symlink)')
+             | list | join(', ') }}.
+        quiet: true
+      when:
+        - factory_cfg.profiles.desktop | bool
+        - factory_desktop_strict_symlink_check | bool
+
+    # --- the pinned Herdr build is the one that runs ------------------------
+
+    - name: Stat the managed Herdr symlink
+      ansible.builtin.stat:
+        path: "{{ factory_local_bin }}/herdr"
+        follow: false
+        get_checksum: false
+      become: true
+      register: factory_verify_herdr_link
+      changed_when: false
+      check_mode: false
+
+    - name: Read the rendered Herdr unit
+      ansible.builtin.slurp:
+        src: "{{ factory_user_units }}/herdr.service"
+      become: true
+      register: factory_verify_herdr_unit
+      changed_when: false
+
+    - name: Assert CLI and service run the same locked build
+      ansible.builtin.assert:
+        that:
+          - (factory_verify_herdr_link.stat.lnk_source | default('')) == factory_herdr_bin
+          - (factory_verify_herdr_unit.content | b64decode) is search('ExecStart=' ~ (factory_herdr_bin | regex_escape))
+        fail_msg: >-
+          The interactive `herdr` command and herdr.service must both resolve to
+          {{ factory_herdr_bin }} (Herdr {{ factory_herdr_version }} from the
+          lock). The symlink points at
+          "{{ factory_verify_herdr_link.stat.lnk_source | default('(missing)') }}".
+        quiet: true
+
+    # --- managed shell environment -----------------------------------------
+
+    - name: Read the account profile
+      ansible.builtin.slurp:
+        src: "{{ factory_cfg.home }}/.profile"
+      become: true
+      register: factory_verify_profile
+      changed_when: false
+      when: factory_manage_profile_path | bool
+
+    - name: Assert the managed environment block is present
+      ansible.builtin.assert:
+        that:
+          - (factory_verify_profile.content | b64decode) is search('code-factory managed environment')
+          - (factory_verify_profile.content | b64decode) is search('\.local/bin')
+          - not (factory_cfg.profiles.agents | bool)
+            or ((factory_verify_profile.content | b64decode) is search('CHROME_DEVTOOLS_AXI_MCP_PATH'))
+        fail_msg: >-
+          {{ factory_cfg.home }}/.profile has no managed block exporting
+          ~/.local/bin{{ ' and CHROME_DEVTOOLS_AXI_MCP_PATH' if (factory_cfg.profiles.agents | bool) else '' }}.
+          A login shell would not see the managed toolchain.
+        quiet: true
+      when: factory_manage_profile_path | bool
+
+    # --- pruner runtime and unit -------------------------------------------
+
+    - name: Read the pruner unit
+      ansible.builtin.slurp:
+        src: "{{ factory_user_units }}/chrome-autoprune.service"
+      become: true
+      register: factory_verify_prune_unit
+      changed_when: false
+      when:
+        - factory_cfg.profiles.agents | bool
+        - factory_cfg.browser_prune.enabled | bool
+
+    - name: Assert the pruner runs the private runtime with --apply
+      ansible.builtin.assert:
+        that:
+          - (factory_verify_prune_unit.content | b64decode)
+            is search('ExecStart=' ~ (factory_pruner_python | regex_escape) ~ ' ' ~ (factory_pruner_script | regex_escape))
+          - (factory_verify_prune_unit.content | b64decode) is search('\s--apply(\s|$)')
+          - (factory_verify_prune_unit.content | b64decode) is not search(code_factory_repo | regex_escape)
+        fail_msg: >-
+          chrome-autoprune.service must start
+          "{{ factory_pruner_python }} {{ factory_pruner_script }} --apply ...".
+          Without --apply the pruner neither records observations nor stops
+          anything, and the unit must not reference {{ code_factory_repo }}: the
+          timer has to keep working without this checkout.
+        quiet: true
+      when:
+        - factory_cfg.profiles.agents | bool
+        - factory_cfg.browser_prune.enabled | bool
+
+    # --- Firstmate is exactly at the pin ------------------------------------
+
+    - name: Read the Firstmate revision
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", rev-parse, HEAD]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      register: factory_verify_fm_head
+      changed_when: false
+      check_mode: false
+      when: factory_cfg.profiles.firstmate | bool
+
+    - name: Assert Firstmate is checked out at the pinned revision
+      ansible.builtin.assert:
+        that:
+          - (factory_verify_fm_head.stdout | trim) == factory_cfg.firstmate.revision
+        fail_msg: >-
+          {{ factory_firstmate_dir }} is at
+          {{ factory_verify_fm_head.stdout | default('(unknown)') | trim }},
+          not the pinned {{ factory_cfg.firstmate.revision }}.
+        quiet: true
+      when: factory_cfg.profiles.firstmate | bool
+
+    # --- runtime state, only where services are managed ---------------------
+
+    - name: Read the state of the managed user units
+      ansible.builtin.command:
+        argv: [systemctl, --user, is-active, "{{ item }}"]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      loop: >-
+        {{ ['herdr.service']
+           + (['chrome-autoprune.timer']
+              if ((factory_cfg.profiles.agents | bool)
+                  and (factory_cfg.browser_prune.enabled | bool)) else [])
+           + (['code-factory-vnc.service', 'code-factory-novnc.service']
+              if (factory_cfg.profiles.desktop | bool) else []) }}
+      register: factory_verify_units
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: factory_manage_services | bool
+
+    - name: Assert the managed user units are running
+      ansible.builtin.assert:
+        that:
+          - factory_verify_units.results
+            | rejectattr('stdout', 'in', ['active', 'activating'])
+            | list | length == 0
+        fail_msg: >-
+          These managed user units are not running:
+          {{ factory_verify_units.results
+             | rejectattr('stdout', 'in', ['active', 'activating'])
+             | map(attribute='item') | list | join(', ') }}.
+          Inspect them with `systemctl --user status <unit>` and
+          `journalctl --user -u <unit>` as {{ factory_cfg.user }}.
+        quiet: true
+      when: factory_manage_services | bool
+
+    - name: Report the units that were written but not started
+      ansible.builtin.debug:
+        msg: >-
+          start_services is false: unit files and their *.target.wants symlinks
+          exist under {{ factory_user_units }}, nothing was started, and no
+          linger was enabled. This is the image-build and container mode.
+      when: not (factory_manage_services | bool)
+
+    # --- the desktop stays on loopback --------------------------------------
+
+    - name: Read the listening TCP sockets
+      ansible.builtin.command:
+        argv: [ss, -H, -l, -t, -n]
+      become: true
+      register: factory_verify_listeners
+      changed_when: false
+      check_mode: false
+      when:
+        - factory_cfg.profiles.desktop | bool
+        - factory_manage_services | bool
+
+    - name: Collect desktop listeners that are not on loopback
+      ansible.builtin.set_fact:
+        factory_desktop_public_listeners: >-
+          {{ factory_verify_listeners.stdout_lines
+             | select('search', ':(' ~ factory_vnc_rfb_port ~ '|' ~ factory_cfg.desktop.novnc_port ~ ')\s')
+             | reject('search', '(127\.0\.0\.1|\[::1\]):(' ~ factory_vnc_rfb_port ~ '|' ~ factory_cfg.desktop.novnc_port ~ ')\s')
+             | list }}
+      when:
+        - factory_cfg.profiles.desktop | bool
+        - factory_manage_services | bool
+
+    - name: Assert the desktop listeners are loopback only
+      ansible.builtin.assert:
+        that:
+          - factory_desktop_public_listeners | length == 0
+        fail_msg: >-
+          The review desktop must never leave loopback, and these sockets do:
+          {{ factory_desktop_public_listeners | join(' | ') }}.
+          VNC requires authentication as well as loopback binding; use an SSH
+          tunnel instead of publishing the desktop directly.
+        quiet: true
+      when:
+        - factory_cfg.profiles.desktop | bool
+        - factory_manage_services | bool
+
+    # --- what provisioning deliberately did not do --------------------------
+
+    - name: Report the manual prerequisites provisioning never performs
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Verified outputs for profiles: '
+              ~ (factory_cfg.profiles | dict2items | selectattr('value')
+                 | map(attribute='key') | list | join(', ') | default('none', true))
+              ~ '.']
+             + ['Manual: authenticate every CLI interactively as '
+                ~ factory_cfg.user
+                ~ ' (gh auth login, OMP/Pi/Codex provider sign-in); no credential was copied.']
+             + (['Manual: join the tailnet with `sudo tailscale up`; Tailscale SSH and the tailnet ACL stay separate decisions.']
+                if (factory_cfg.profiles.tailscale | bool) else [])
+             + (['Manual: add accounts to the docker group yourself (factory_docker_group_users); it grants host root.']
+                if ((factory_cfg.profiles.docker | bool) and (factory_docker_group_users | length == 0)) else [])
+             + (['Manual: sign in once inside the single persistent profile '
+                 ~ factory_vnc_chrome_profile
+                 ~ ' via `vnc-chrome`, reached through `ssh -N -L '
+                 ~ factory_cfg.desktop.novnc_port ~ ':127.0.0.1:'
+                 ~ factory_cfg.desktop.novnc_port ~ ' ' ~ factory_cfg.user ~ '@<host>`.']
+                if (factory_cfg.profiles.desktop | bool) else [])
+             + (['Manual: Firstmate startup and fleet restore are never run by provisioning.']
+                if (factory_cfg.profiles.firstmate | bool) else [])
+             + ['Unchanged by design: sshd configuration, firewall rules, existing credentials and unrelated account membership.'] }}

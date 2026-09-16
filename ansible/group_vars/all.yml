@@ -1,0 +1,252 @@
+---
+# Code Factory - native provisioning variables.
+#
+# The CLI passes the whole validated configuration document as extra vars, so
+# `factory` (and `schema_version`) arrive from config/default.yml or
+# .local/host.yml. Extra vars replace a variable wholesale, so the defaults of
+# the contract document are kept separately in `factory_defaults` and merged
+# recursively into `factory_cfg`. Task files consume `factory_cfg.*`, which is
+# `factory.*` with contract defaults filled in for keys the caller omitted.
+#
+# Nothing in this file may contain a secret, a token, a host identity or a
+# /home/ubuntu literal.
+
+factory_defaults: "{{ (lookup('ansible.builtin.file', code_factory_repo ~ '/config/default.yml') | from_yaml).factory }}"
+
+factory_cfg: "{{ factory_defaults | combine(factory | default({}, true), recursive=True) }}"
+
+# --- Repository layout (Main-owned inputs) ----------------------------------
+# Override code_factory_repo if the CLI ever invokes the playbook from outside
+# the checkout.
+code_factory_repo: "{{ playbook_dir | dirname }}"
+factory_installer: "{{ code_factory_repo }}/scripts/install_tools.py"
+factory_lock_file: "{{ code_factory_repo }}/toolchain.lock.json"
+factory_pruner_source: "{{ code_factory_repo }}/maintenance/chrome-autoprune.py"
+factory_pruner_requirements: "{{ code_factory_repo }}/maintenance/requirements.txt"
+
+# Pinned versions come from the reviewed lock, never from a default here.
+factory_lock: "{{ lookup('ansible.builtin.file', factory_lock_file) | from_json }}"
+factory_herdr_version: "{{ factory_lock.tools.herdr.version }}"
+
+# --- Platform ---------------------------------------------------------------
+factory_platform_map:
+  x86_64: linux-x86_64
+  amd64: linux-x86_64
+  aarch64: linux-aarch64
+  arm64: linux-aarch64
+factory_platform: "{{ factory_platform_map[ansible_architecture] | default('') }}"
+factory_deb_arch_map:
+  x86_64: amd64
+  amd64: amd64
+  aarch64: arm64
+  arm64: arm64
+factory_deb_arch: "{{ factory_deb_arch_map[ansible_architecture] | default('') }}"
+factory_supported_ubuntu_releases: ["24.04", "26.04"]
+factory_allow_unsupported_os: false
+
+# --- Derived paths ----------------------------------------------------------
+factory_local_bin: "{{ factory_cfg.home }}/.local/bin"
+factory_share_dir: "{{ factory_cfg.home }}/.local/share/code-factory"
+factory_tools_root: "{{ factory_share_dir }}/tools"
+# Locked npm set installed by `install_tools.py --npm` (agents profile).
+factory_npm_root: "{{ factory_share_dir }}/npm"
+# AXI must launch the pinned chrome-devtools MCP build instead of resolving
+# `npx ...@latest` at runtime. Exported to the managed shell environment and
+# to the Herdr service environment.
+factory_chrome_devtools_mcp_path: "{{ factory_npm_root }}/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js"
+# Environment shared by the interactive shell profile and the Herdr unit.
+# Consumed only when the agents profile is on, because the npm set that
+# provides the MCP entrypoint is installed by `--npm`.
+factory_managed_shell_env:
+  CHROME_DEVTOOLS_AXI_MCP_PATH: "{{ factory_chrome_devtools_mcp_path }}"
+# Contract: compute the unit ExecStart directly, never /usr/local/bin or $PATH.
+factory_herdr_bin: "{{ factory_tools_root }}/herdr/{{ factory_herdr_version }}/{{ factory_platform }}/herdr"
+factory_herdr_config_dir: "{{ factory_cfg.home }}/.config/herdr"
+factory_herdr_config: "{{ factory_herdr_config_dir }}/config.toml"
+factory_user_units: "{{ factory_cfg.home }}/.config/systemd/user"
+factory_firstmate_dir: "{{ factory_cfg.workspace }}/firstmate"
+factory_vnc_dir: "{{ factory_cfg.home }}/.vnc"
+# Exactly one persistent Chrome profile for the VNC desktop. Never seeded,
+# copied, cloned or duplicated (docs/security.md).
+factory_vnc_chrome_profile: "{{ factory_cfg.home }}/.vnc-chrome-profile"
+
+# Private runtime for the Chrome pruner. The exported pruner calls
+# psutil.Process.net_connections(), which exists from psutil 6 onwards, while
+# Ubuntu 24.04 ships python3-psutil 5.9. Instead of shimming the deprecated
+# API or pip-installing into the distribution interpreter, the pruner runs on
+# an account-owned virtualenv built by the managed uv and filled from
+# maintenance/requirements.txt with --require-hashes. The unit references only
+# paths under the account's home, so the timer keeps working after the
+# repository checkout is gone.
+factory_uv_bin: "{{ factory_local_bin }}/uv"
+factory_pruner_script: "{{ factory_local_bin }}/chrome-autoprune.py"
+factory_pruner_venv: "{{ factory_share_dir }}/pruner-venv"
+factory_pruner_python: "{{ factory_pruner_venv }}/bin/python"
+# Written after a successful install; carries the digest of the requirements
+# file that produced the runtime, so a changed pin reinstalls and an unchanged
+# pin is a no-op on the second apply.
+factory_pruner_stamp: "{{ factory_pruner_venv }}/.code-factory-runtime.json"
+factory_pruner_requirements_text: "{{ lookup('ansible.builtin.file', factory_pruner_requirements) }}"
+factory_pruner_requirements_digest: "{{ factory_pruner_requirements_text | hash('sha256') }}"
+factory_pruner_psutil_version: '{{ factory_pruner_requirements_text | regex_findall("(?m)^psutil==([A-Za-z0-9][A-Za-z0-9._-]*)") | first | default("", true) }}'
+# The base interpreter of that virtualenv. Pinned to the distribution
+# interpreter so no managed Python is downloaded behind the operator's back.
+factory_pruner_base_python: /usr/bin/python3
+factory_pruner_uv_env:
+  UV_PYTHON_DOWNLOADS: never
+  UV_NO_CONFIG: "1"
+
+# systemd/service switches. start_services=false (image builds, containers)
+# suppresses every linger, daemon-reload, enable-at-runtime and start action;
+# unit files and their static *.target.wants symlinks are still written.
+factory_manage_services: "{{ factory_cfg.start_services | bool }}"
+factory_manage_linger: "{{ (factory_cfg.start_services | bool) and (factory_cfg.enable_linger | bool) }}"
+
+# Escalate to the target account only when we are not already that account.
+factory_become_target: "{{ (ansible_user_id | default('')) != factory_cfg.user }}"
+factory_user_runtime_dir: "/run/user/{{ factory_user_uid | default('') }}"
+factory_user_systemd_env:
+  XDG_RUNTIME_DIR: "{{ factory_user_runtime_dir }}"
+  DBUS_SESSION_BUS_ADDRESS: "unix:path={{ factory_user_runtime_dir }}/bus"
+  PATH: "{{ factory_local_bin }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+factory_user_env:
+  HOME: "{{ factory_cfg.home }}"
+  USER: "{{ factory_cfg.user }}"
+  LOGNAME: "{{ factory_cfg.user }}"
+  PATH: "{{ factory_local_bin }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# --- Account policy (conservative by default) -------------------------------
+factory_create_user: true
+factory_user_shell: /bin/bash
+# Never granted implicitly. Add the account to sudo only by explicit choice.
+factory_user_sudo: false
+# Marker-delimited PATH block in the account's ~/.profile.
+factory_manage_profile_path: true
+
+# --- apt package sets -------------------------------------------------------
+factory_apt_cache_valid_time: 3600
+factory_base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - tar
+  - unzip
+  - xz-utils
+  - zstd
+  - procps
+  - acl
+  - python3
+  - python3-venv
+  - openssl
+  - rsync
+factory_development_packages:
+  - build-essential
+  - pkg-config
+  - libssl-dev
+  - python3-dev
+  - cmake
+  - ripgrep
+# No python3-psutil here on purpose: the pruner runs on its own hash-pinned
+# virtualenv (factory_pruner_venv), not on the distribution interpreter.
+factory_docker_packages:
+  - docker.io
+  - docker-compose-v2
+factory_desktop_packages:
+  - xfce4
+  - xfce4-terminal
+  - dbus-x11
+  - xauth
+  - x11-xserver-utils
+  - fonts-dejavu-core
+  - tigervnc-standalone-server
+  - tigervnc-common
+  - tigervnc-tools
+  - novnc
+  - websockify
+  # `ss` is how tasks/verify.yml proves both listeners stayed on loopback.
+  - iproute2
+
+# --- Tool installer ---------------------------------------------------------
+factory_core_tools: [herdr, node, bun, uv]
+
+# --- Herdr static config ----------------------------------------------------
+# Only the reviewed, non-secret subset is templated. experimental.pane_history
+# is deliberately absent: it persists terminal output that can contain tokens.
+factory_herdr_update_channel: stable
+factory_herdr_show_agent_labels: true
+factory_herdr_theme_auto_switch: false
+
+# --- Browser pruning --------------------------------------------------------
+# Flags confirmed by Main (owner of maintenance/chrome-autoprune.py): without
+# --apply the script neither keeps state nor prunes.
+factory_prune_exec_args:
+  - "--apply"
+  - "--idle-seconds"
+  - "{{ factory_cfg.browser_prune.idle_seconds }}"
+  - "--max-gap-seconds"
+  - "{{ factory_cfg.browser_prune.max_gap_seconds }}"
+factory_prune_timeout_seconds: 90
+
+# --- Sanitized preference files (Main-owned sources) ------------------------
+# first_write: true means the file is written only when it does not exist, so
+# an account that already holds provider settings is never overwritten.
+factory_agent_config_files:
+  - src: config/omp.yml
+    dest: "{{ factory_cfg.home }}/.omp/agent/config.yml"
+    dir_mode: "0700"
+    mode: "0600"
+    first_write: true
+  - src: config/pi.json
+    dest: "{{ factory_cfg.home }}/.pi/agent/settings.json"
+    dir_mode: "0700"
+    mode: "0600"
+    first_write: true
+
+# Firstmate reads these from its own checkout and already gitignores them, so
+# the clone stays clean and no .gitignore is edited.
+factory_firstmate_config_names:
+  - crew-harness
+  - secondmate-harness
+  - crew-dispatch.json
+  - backend
+  - startup-memory-budget
+factory_firstmate_config_first_write: false
+
+# --- Docker -----------------------------------------------------------------
+# Ubuntu's docker.io + docker-compose-v2 only; never mixed with Docker CE.
+# Docker group membership equals passwordless root on the host, so it is an
+# explicit opt-in list, never the factory account by default.
+factory_docker_group_users: []
+
+# --- Tailscale (install only; login, ACLs, SSH and UFW stay manual) ---------
+factory_tailscale_track: stable
+factory_tailscale_suite: "{{ ansible_distribution_release }}"
+factory_tailscale_keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
+# Optional exact apt version pin, e.g. "1.102.3". Empty installs the current
+# package from the stable track.
+factory_tailscale_version: ""
+
+# --- Chrome -----------------------------------------------------------------
+# auto  -> install only when the desktop profile is enabled
+# true  -> always install (headless AXI bridge use without a desktop)
+# false -> never install
+factory_chrome_install: auto
+factory_chrome_package: google-chrome-stable
+factory_chrome_keyring: /usr/share/keyrings/google-chrome.asc
+factory_chrome_key_url: https://dl.google.com/linux/linux_signing_key.pub
+factory_chrome_repo_uri: https://dl.google.com/linux/chrome/deb/
+# Optional exact apt version pin. Empty tracks the repository, which is the
+# only workable default: Google removes superseded Chrome versions from the
+# pool, so a hard pin stops resolving after the next release.
+factory_chrome_version: ""
+
+# --- Desktop ----------------------------------------------------------------
+# VNC requires an operator-created credential plus loopback/SSH transport.
+# noVNC binds 127.0.0.1 only and still prompts for the RFB password.
+factory_vnc_password_file: "{{ factory_vnc_dir }}/passwd"
+factory_vnc_rfb_port: "{{ 5900 + (factory_cfg.desktop.display | int) }}"
+factory_novnc_web_root: /usr/share/novnc/
+factory_desktop_strict_symlink_check: true

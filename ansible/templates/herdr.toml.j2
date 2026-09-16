@@ -1,0 +1,29 @@
+{{ ansible_managed | comment }}
+# Herdr {{ factory_herdr_version }} static configuration.
+#
+# Reviewed, non-secret subset only. Session state, pane history, saved machine
+# catalogues and workspace state are deliberately not reproduced here.
+# experimental.pane_history stays absent: it persists terminal output that can
+# contain tokens.
+
+onboarding = false
+
+[theme]
+name = "{{ factory_cfg.herdr.theme }}"
+auto_switch = {{ factory_herdr_theme_auto_switch | bool | lower }}
+
+[ui]
+show_agent_labels_on_pane_borders = {{ factory_herdr_show_agent_labels | bool | lower }}
+agent_panel_sort = "{{ factory_cfg.herdr.agent_panel_sort }}"
+
+[ui.toast]
+delivery = "{{ factory_cfg.herdr.toast_delivery }}"
+
+[update]
+# Controls the updater's own check behaviour only. The installed build is
+# pinned by toolchain.lock.json; never run `herdr update` from provisioning.
+channel = "{{ factory_herdr_update_channel }}"
+
+[server]
+headless_cols = {{ factory_cfg.herdr.headless_cols | int }}
+headless_rows = {{ factory_cfg.herdr.headless_rows | int }}

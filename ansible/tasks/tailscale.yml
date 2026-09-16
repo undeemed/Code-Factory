@@ -1,0 +1,66 @@
+---
+# Tailscale: installation only.
+#
+# No `tailscale up`, no auth key, no node identity, no tailnet ACL, no SSH
+# authorisation, no UFW or sshd change. Joining the tailnet and enabling
+# Tailscale SSH are separate, interactive, reviewed steps (docs/security.md,
+# "Remote access"). /etc/default/tailscaled is left exactly as the package
+# ships it.
+#
+# Source: the official Tailscale apt repository for this Ubuntu release,
+# https://pkgs.tailscale.com/{{ factory_tailscale_track }}/ubuntu/
+
+- name: Ensure the keyring directory exists
+  ansible.builtin.file:
+    path: /usr/share/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install the Tailscale repository signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/{{ factory_tailscale_track }}/ubuntu/{{ factory_tailscale_suite }}.noarmor.gpg"
+    dest: "{{ factory_tailscale_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: factory_tailscale_key
+
+- name: Configure the Tailscale apt repository
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: [deb]
+    uris: "https://pkgs.tailscale.com/{{ factory_tailscale_track }}/ubuntu"
+    suites: ["{{ factory_tailscale_suite }}"]
+    components: [main]
+    architectures: ["{{ factory_deb_arch }}"]
+    signed_by: "{{ factory_tailscale_keyring }}"
+    enabled: true
+    state: present
+  become: true
+  register: factory_tailscale_repo
+
+- name: Refresh the apt cache for the Tailscale repository
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  changed_when: false
+  when: (factory_tailscale_key.changed | default(false)) or (factory_tailscale_repo.changed | default(false))
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: "tailscale{{ ('=' ~ factory_tailscale_version) if (factory_tailscale_version | default('') | length > 0) else '' }}"
+    state: present
+  become: true
+
+- name: Report the manual Tailscale prerequisites
+  ansible.builtin.debug:
+    msg:
+      - "Tailscale is installed but this host is not on a tailnet."
+      - "Join interactively as an administrator: sudo tailscale up"
+      - "Tailscale SSH is a separate decision: sudo tailscale set --ssh=true, and the tailnet ACL must also authorise it."
+      - "Never use `tailscale up --reset` to change one setting on an existing node."
+      - "No firewall or sshd policy was modified by provisioning."

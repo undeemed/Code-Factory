@@ -1,0 +1,93 @@
+# Build context boundary. Machine-local state, credentials and runtime data are
+# never build inputs; the image provisions itself from tracked sources only.
+# Patterns are matched against the whole context-relative path, so nested
+# occurrences use an explicit `**/` prefix.
+
+# Version control and CI metadata
+.git
+**/.git
+.github
+.gitignore
+
+# Machine-local inventory, secrets and virtualenvs
+.local
+**/.venv
+**/venv
+**/.local
+**/.tox
+**/.nox
+**/.env
+**/.env.*
+!**/.env.example
+**/*.age
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/secrets
+
+# Credential, provider auth and key stores
+**/.ssh
+**/.netrc
+**/.npmrc
+**/.docker
+**/.aws
+**/.config/gh
+**/.config/gcloud
+**/.config/op
+**/.gnupg
+**/.kube
+**/.password-store
+**/.omp
+**/.pi
+**/.claude
+**/.codex
+
+# Runtime browser / desktop / agent / service state
+**/.vnc
+**/.vnc-chrome-profile
+**/.chrome-devtools-axi
+**/.fm-desktops
+**/.config/herdr
+**/.config/systemd
+**/*.sock
+**/*.pid
+**/.bash_history
+**/.zsh_history
+**/.python_history
+**/.node_repl_history
+
+# Build, cache and test artifacts
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/node_modules
+**/.cache
+**/.cargo
+**/.rustup
+**/.npm
+**/.bun
+**/.nvm
+**/dist
+**/build
+**/artifacts
+**/*.log
+
+# Application data: an image never inherits a database or an export
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.dump
+
+# Infrastructure state
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform
+
+# Container definitions that are never needed inside the image
+compose.yml
+compose.*.yml
+.devcontainer
+.dockerignore

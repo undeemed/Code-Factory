@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "tools": {
+    "herdr": {
+      "version": "0.9.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-x86_64",
+          "sha256": "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f",
+          "format": "file",
+          "binaries": {
+            "herdr": "herdr"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-aarch64",
+          "sha256": "9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2",
+          "format": "file",
+          "binaries": {
+            "herdr": "herdr"
+          }
+        }
+      }
+    },
+    "node": {
+      "version": "24.19.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz",
+          "sha256": "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+          "format": "tar",
+          "binaries": {
+            "node": "node-v24.19.0-linux-x64/bin/node",
+            "npm": "node-v24.19.0-linux-x64/bin/npm",
+            "npx": "node-v24.19.0-linux-x64/bin/npx"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz",
+          "sha256": "01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc",
+          "format": "tar",
+          "binaries": {
+            "node": "node-v24.19.0-linux-arm64/bin/node",
+            "npm": "node-v24.19.0-linux-arm64/bin/npm",
+            "npx": "node-v24.19.0-linux-arm64/bin/npx"
+          }
+        }
+      }
+    },
+    "bun": {
+      "version": "1.4.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64-baseline.zip",
+          "sha256": "184fb4595f0d401a217cf7c78c1bc430ba83314dab7a8b94805babbf7fa7097f",
+          "format": "zip",
+          "binaries": {
+            "bun": "bun-linux-x64-baseline/bun"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-aarch64.zip",
+          "sha256": "4b1a332ee861983eb93bcfe6f770fff94e3e31b2c388bdaea3c8ed35e58eed0e",
+          "format": "zip",
+          "binaries": {
+            "bun": "bun-linux-aarch64/bun"
+          }
+        }
+      }
+    },
+    "uv": {
+      "version": "0.12.5",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2",
+          "format": "tar",
+          "binaries": {
+            "uv": "uv-x86_64-unknown-linux-gnu/uv",
+            "uvx": "uv-x86_64-unknown-linux-gnu/uvx"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "9bf43b4d1a07665bf64d4c4e710930b382321a785e0eb10aac07f46471f86a31",
+          "format": "tar",
+          "binaries": {
+            "uv": "uv-aarch64-unknown-linux-gnu/uv",
+            "uvx": "uv-aarch64-unknown-linux-gnu/uvx"
+          }
+        }
+      }
+    },
+    "gh": {
+      "version": "2.97.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_amd64.tar.gz",
+          "sha256": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
+          "format": "tar",
+          "binaries": {
+            "gh": "gh_2.97.0_linux_amd64/bin/gh"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_arm64.tar.gz",
+          "sha256": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
+          "format": "tar",
+          "binaries": {
+            "gh": "gh_2.97.0_linux_arm64/bin/gh"
+          }
+        }
+      }
+    },
+    "no-mistakes": {
+      "version": "1.48.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/kunchenguid/no-mistakes/releases/download/v1.48.0/no-mistakes-v1.48.0-linux-amd64.tar.gz",
+          "sha256": "c67c65d626f4c6e6b44c2c079232ec8104f565d124cbe5a300766c85c2ba5bc0",
+          "format": "tar",
+          "binaries": {
+            "no-mistakes": "no-mistakes"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/kunchenguid/no-mistakes/releases/download/v1.48.0/no-mistakes-v1.48.0-linux-arm64.tar.gz",
+          "sha256": "7ce8b7f712acc889f48788418435cdd28375222c9450e43a024d043824edb2b2",
+          "format": "tar",
+          "binaries": {
+            "no-mistakes": "no-mistakes"
+          }
+        }
+      }
+    },
+    "treehouse": {
+      "version": "2.1.1",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/kunchenguid/treehouse/releases/download/v2.1.1/treehouse-v2.1.1-linux-amd64.tar.gz",
+          "sha256": "2fe3e01220ae51a967c3e5ba6ccf10ec83bdbae8e420368d194285a8d04c9ef8",
+          "format": "tar",
+          "binaries": {
+            "treehouse": "treehouse"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/kunchenguid/treehouse/releases/download/v2.1.1/treehouse-v2.1.1-linux-arm64.tar.gz",
+          "sha256": "980367c0233274eb3181a19a2ca8ec69d09b4a588ba27367937d336f9a2c938e",
+          "format": "tar",
+          "binaries": {
+            "treehouse": "treehouse"
+          }
+        }
+      }
+    },
+    "rustup-init": {
+      "version": "1.29.0",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init",
+          "sha256": "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10",
+          "format": "file",
+          "binaries": {
+            "rustup-init": "rustup-init"
+          }
+        },
+        "linux-aarch64": {
+          "url": "https://static.rust-lang.org/rustup/archive/1.29.0/aarch64-unknown-linux-gnu/rustup-init",
+          "sha256": "9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792",
+          "format": "file",
+          "binaries": {
+            "rustup-init": "rustup-init"
+          }
+        }
+      }
+    }
+  },
+  "npm_required_tools": [
+    "gh",
+    "no-mistakes",
+    "treehouse"
+  ],
+  "rust_toolchain": "1.97.1"
+}

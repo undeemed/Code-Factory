@@ -1,0 +1,186 @@
+---
+# Code Factory - native Ubuntu 24.04 / 26.04 provisioning on x86_64 and
+# aarch64. Invoked by `./factory plan` (check mode) and `./factory apply`.
+#
+# Design rules enforced throughout:
+#   * every task is idempotent; a second unchanged apply reports changed=0
+#   * no unconditional restarts, daemon-reloads or bare commands
+#   * `factory.start_services: false` suppresses linger and every runtime
+#     systemd action, but still writes unit files and their static
+#     *.target.wants symlinks, so a container image can be built and the same
+#     configuration boots correctly on a real host
+#   * check mode never mutates: commands are either read-only (check_mode:
+#     false) or skipped when ansible_check_mode is true
+- name: Code Factory native provisioning
+  hosts: code_factory
+  gather_facts: true
+  become: false
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
+
+  pre_tasks:
+    - name: Validate configuration, platform and Main-owned inputs
+      ansible.builtin.import_tasks: tasks/preflight.yml
+      tags: [always]
+
+  tasks:
+    - name: Target account, home, workspace and user manager
+      ansible.builtin.import_tasks: tasks/account.yml
+      tags: [account]
+
+    - name: Base and profile apt prerequisites
+      ansible.builtin.import_tasks: tasks/packages.yml
+      tags: [packages]
+
+    # Everything below writes files owned by the target account, so it needs a
+    # resolvable uid. `factory_account_ready` is false only in check mode on a
+    # host where the account does not exist yet: `./factory plan` then reports
+    # the account work and skips what it cannot preview, instead of failing on
+    # an owner that cannot be looked up. On a real apply the account exists by
+    # this point and nothing is skipped.
+    - name: Pinned toolchain via the repository installer
+      ansible.builtin.import_tasks: tasks/tools.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when: factory_account_ready | bool
+      tags: [tools]
+
+    - name: Herdr static configuration and user service
+      ansible.builtin.import_tasks: tasks/herdr.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when: factory_account_ready | bool
+      tags: [herdr]
+
+    - name: Agent harness preferences
+      ansible.builtin.import_tasks: tasks/agents.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.agents | bool
+      tags: [agents]
+
+    - name: Chrome AXI bridge pruning unit and timer
+      ansible.builtin.import_tasks: tasks/browser_prune.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.agents | bool
+        - factory_cfg.browser_prune.enabled | bool
+      tags: [agents, prune]
+
+    - name: Firstmate pinned checkout and dispatch settings
+      ansible.builtin.import_tasks: tasks/firstmate.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.firstmate | bool
+      tags: [firstmate]
+
+    - name: Docker engine and Compose v2 from Ubuntu
+      ansible.builtin.import_tasks: tasks/docker.yml
+      when: factory_cfg.profiles.docker | bool
+      tags: [docker]
+
+    - name: Tailscale package installation only
+      ansible.builtin.import_tasks: tasks/tailscale.yml
+      when: factory_cfg.profiles.tailscale | bool
+      tags: [tailscale]
+
+    - name: Google Chrome from the official distribution repository
+      ansible.builtin.import_tasks: tasks/browser.yml
+      when: >-
+        (factory_chrome_install | string | lower == 'true')
+        or ((factory_chrome_install | string | lower == 'auto')
+            and (factory_cfg.profiles.desktop | bool))
+      tags: [browser, desktop]
+
+    - name: Loopback-only XFCE / TigerVNC / noVNC desktop
+      ansible.builtin.import_tasks: tasks/desktop.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.desktop | bool
+      tags: [desktop]
+
+  post_tasks:
+    # Run notified handlers before anything is verified, so readiness checks
+    # observe the reloaded user manager and the restarted services.
+    - name: Apply pending unit reloads and restarts before verification
+      ansible.builtin.meta: flush_handlers
+      tags: [always]
+
+    - name: Verify provisioning outputs
+      ansible.builtin.import_tasks: tasks/verify.yml
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      tags: [verify]
+
+  handlers:
+    # Handlers run in definition order, so the daemon-reload always precedes
+    # the unit restarts it enables.
+    - name: Reload the user systemd manager
+      ansible.builtin.systemd_service:
+        scope: user
+        daemon_reload: true
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: reload user systemd
+
+    - name: Restart the Herdr user service
+      ansible.builtin.systemd_service:
+        scope: user
+        name: herdr.service
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: restart herdr
+
+    - name: Restart the Chrome autoprune timer
+      ansible.builtin.systemd_service:
+        scope: user
+        name: chrome-autoprune.timer
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: restart chrome autoprune timer
+
+    - name: Restart the noVNC bridge
+      ansible.builtin.systemd_service:
+        scope: user
+        name: code-factory-novnc.service
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: restart novnc
+
+    # Restarting the VNC server kills the live desktop session and every
+    # process inside it, so it is reported instead of performed.
+    - name: Report that the VNC session must be restarted manually
+      ansible.builtin.debug:
+        msg: >-
+          VNC configuration changed. Restart it when the desktop is idle:
+          systemctl --user restart code-factory-vnc.service
+          (this terminates everything running inside display
+          :{{ factory_cfg.desktop.display }}).
+      listen: vnc restart required

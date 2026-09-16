@@ -1,0 +1,26 @@
+{{ ansible_managed | comment }}
+# Herdr {{ factory_herdr_version }} ({{ factory_platform }}) as a user service.
+# ExecStart is the absolute versioned path from toolchain.lock.json, so neither
+# $PATH nor a leftover /usr/local/bin build can shadow the pinned one.
+# No credential, EnvironmentFile or inline secret belongs in this unit.
+
+[Unit]
+Description=Herdr agent multiplexer server (Code Factory managed)
+Documentation=https://herdr.dev/docs/
+
+[Service]
+Type=simple
+ExecStart={{ factory_herdr_bin }} server
+WorkingDirectory={{ factory_cfg.workspace }}
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+{% if factory_cfg.profiles.agents | bool %}
+{% for key, value in factory_managed_shell_env | dictsort %}
+# Pinned MCP entrypoint, so AXI never resolves a floating npx package.
+Environment={{ key }}={{ value }}
+{% endfor %}
+{% endif %}
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

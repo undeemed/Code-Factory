@@ -1,0 +1,81 @@
+#cloud-config
+# Code Factory - optional first-boot prerequisites for a fresh Ubuntu
+# 24.04 / 26.04 machine. Vendor neutral: nothing here is specific to a cloud,
+# a hypervisor or an image vendor.
+#
+# What this does
+#   Installs the operating-system packages needed to *run* Code Factory:
+#   git to obtain the checkout, python3 + python3-venv for the pinned uv
+#   bootstrap, acl because Ansible escalates from one unprivileged account to
+#   another, and the archive/transport tools the pinned installer uses.
+#
+# What this deliberately does not do
+#   * no SSH keys, passwords, API tokens, auth keys or node identities - add
+#     access through your platform's own key mechanism before first boot
+#   * no account creation: `./factory apply` creates factory.user with the
+#     home and workspace from your configuration document
+#   * no sshd, firewall, UFW or Tailscale change - all of those stay manual
+#     and reviewed (docs/security.md)
+#   * no clone of the private repository and no provisioning run: that needs
+#     your own credentials and an explicit decision
+#
+# How to use it
+#   Provider "user data" field: paste this file's contents.
+#   NoCloud seed (ISO or vfat labelled CIDATA), filenames must be exact:
+#     cp cloud-init/user-data.yaml seed/user-data
+#     cp cloud-init/meta-data.yaml seed/meta-data
+#   Local re-run for testing on a disposable machine:
+#     sudo cloud-init schema --config-file cloud-init/user-data.yaml
+#
+# After first boot, as the account that will own the factory:
+#   git clone <your private remote> ~/Dev/Code-Factory
+#   cd ~/Dev/Code-Factory && ./bootstrap.sh init && ./bootstrap.sh apply
+#
+# Keep the distribution's own package sources; this adds none of its own. The
+# Chrome, Docker and Tailscale sources are added later, by the profiles that
+# need them, only when you enable them.
+
+package_update: true
+# Applies the security updates already published for the image. Lengthens the
+# first boot; set to false if your platform images are rebuilt frequently.
+package_upgrade: true
+
+packages:
+  # Transport and integrity
+  - ca-certificates
+  - curl
+  - gnupg
+  - openssl
+  # Checkout and file handling
+  - git
+  - rsync
+  - tar
+  - unzip
+  - xz-utils
+  - zstd
+  # Used by the CLI, the pinned uv bootstrap and the playbook
+  - python3
+  - python3-venv
+  - jq
+  - procps
+  # Ansible escalates unprivileged -> unprivileged, which needs POSIX ACLs on
+  # the temporary directory; sudo is how the playbook reaches root at all.
+  - acl
+  - sudo
+
+write_files:
+  # Evidence that the prerequisites ran, for support and for `factory doctor`.
+  # No secret, no host identity, no provider metadata.
+  - path: /var/lib/code-factory/cloud-init-prerequisites
+    owner: root:root
+    permissions: "0644"
+    defer: true
+    content: |
+      # Code Factory cloud-init prerequisites applied at first boot.
+      # Packages only. No account, credential, firewall or SSH change was made
+      # here, and no provisioning was run.
+      prerequisites=ca-certificates,curl,gnupg,openssl,git,rsync,tar,unzip,xz-utils,zstd,python3,python3-venv,jq,procps,acl,sudo
+      next=clone the repository, then ./bootstrap.sh apply
+
+# Nothing is executed on first boot: provisioning is an explicit, credentialed
+# step the operator runs, not something a seed image starts on its own.

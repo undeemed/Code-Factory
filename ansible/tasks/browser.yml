@@ -1,0 +1,64 @@
+---
+# Google Chrome from Google's own apt repository.
+#
+# Verified source (checked against the live repository indexes):
+#   key    https://dl.google.com/linux/linux_signing_key.pub   (ASCII armoured)
+#   repo   https://dl.google.com/linux/chrome/deb/ stable main
+#   arches dists/stable/main/binary-amd64 and binary-arm64 both publish
+#          google-chrome-stable, so x86_64 and aarch64 hosts are both served
+#          by this one source.
+#
+# Nothing here creates, copies or seeds a browser profile. The desktop uses one
+# persistent profile that the operator signs into on the destination device
+# (docs/security.md).
+
+- name: Keep the Chrome package from adding a duplicate apt source
+  ansible.builtin.copy:
+    dest: /etc/default/google-chrome
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Code Factory.
+      # The apt source is declared in /etc/apt/sources.list.d/google-chrome.sources,
+      # so the package postinst must not add a second copy of it.
+      repo_add_once=false
+      repo_reenable_on_distupgrade=false
+  become: true
+
+- name: Install the Google Linux signing key
+  ansible.builtin.get_url:
+    url: "{{ factory_chrome_key_url }}"
+    dest: "{{ factory_chrome_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: factory_chrome_key
+
+- name: Configure the Google Chrome apt repository
+  ansible.builtin.deb822_repository:
+    name: google-chrome
+    types: [deb]
+    uris: "{{ factory_chrome_repo_uri }}"
+    suites: [stable]
+    components: [main]
+    architectures: ["{{ factory_deb_arch }}"]
+    signed_by: "{{ factory_chrome_keyring }}"
+    enabled: true
+    state: present
+  become: true
+  register: factory_chrome_repo
+
+- name: Refresh the apt cache for the Chrome repository
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  changed_when: false
+  when: (factory_chrome_key.changed | default(false)) or (factory_chrome_repo.changed | default(false))
+
+- name: Install Google Chrome
+  ansible.builtin.apt:
+    name: "{{ factory_chrome_package }}{{ ('=' ~ factory_chrome_version) if (factory_chrome_version | default('') | length > 0) else '' }}"
+    state: present
+  become: true

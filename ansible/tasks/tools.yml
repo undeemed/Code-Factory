@@ -1,0 +1,109 @@
+---
+# Pinned toolchain, installed by the repository installer as the target user.
+#
+# Contract: python3 <repo>/scripts/install_tools.py --lock <repo>/toolchain.lock.json
+#           --home <factory.home> --tools herdr,node,bun,uv [--npm] [--development]
+# The installer is idempotent and prints a final JSON object
+# {"changed": bool, "installed": [...]}, which is the only changed signal this
+# task trusts - the exit status alone would report a change on every apply.
+
+- name: Compose the installer command line
+  ansible.builtin.set_fact:
+    factory_installer_argv: >-
+      {{ ['python3', factory_installer,
+          '--lock', factory_lock_file,
+          '--home', factory_cfg.home,
+          '--tools', factory_core_tools | join(',')]
+         + (['--npm'] if (factory_cfg.profiles.agents | bool) else [])
+         + (['--development'] if (factory_cfg.profiles.development | bool) else []) }}
+
+- name: Show the installer invocation
+  ansible.builtin.debug:
+    msg: "{{ factory_installer_argv | join(' ') }}"
+
+# The installer is not check-mode aware, so a plan reports the invocation
+# instead of running it.
+- name: Report the installer invocation in check mode
+  ansible.builtin.debug:
+    msg: >-
+      check mode: would run the toolchain installer as {{ factory_cfg.user }};
+      Herdr {{ factory_herdr_version }} would land at {{ factory_herdr_bin }}.
+  when: ansible_check_mode
+
+- name: Install the pinned toolchain as the target user
+  ansible.builtin.command:
+    argv: "{{ factory_installer_argv }}"
+    chdir: "{{ code_factory_repo }}"
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  register: factory_installer_run
+  failed_when: >-
+    factory_installer_run.rc != 0
+    or (factory_installer_run.stdout_lines | default([])
+        | select('match', '^\s*\{.*\}\s*$') | list | length) == 0
+  changed_when: >-
+    ((factory_installer_run.stdout_lines | default([])
+      | select('match', '^\s*\{.*\}\s*$') | list | last | default('{"changed": false}'))
+     | from_json).changed | bool
+  when: not ansible_check_mode
+
+- name: Record the installer report
+  ansible.builtin.set_fact:
+    factory_installer_report: >-
+      {{ (factory_installer_run.stdout_lines
+          | select('match', '^\s*\{.*\}\s*$') | list | last) | from_json }}
+  when: not ansible_check_mode
+
+- name: Show the tools the installer reports
+  ansible.builtin.debug:
+    var: factory_installer_report.installed
+    verbosity: 1
+  when: not ansible_check_mode
+
+- name: Stat the pinned Herdr executable
+  ansible.builtin.stat:
+    path: "{{ factory_herdr_bin }}"
+    get_checksum: false
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  register: factory_herdr_stat
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert the installer produced the locked Herdr executable
+  ansible.builtin.assert:
+    that:
+      - factory_herdr_stat.stat.exists | default(false)
+      - factory_herdr_stat.stat.executable | default(false)
+    fail_msg: >-
+      {{ factory_herdr_bin }} is missing or not executable after the installer
+      ran. The user unit ExecStart is computed from the lock
+      (tools.herdr.version = {{ factory_herdr_version }}) and the platform
+      directory {{ factory_platform }}; installer and lock disagree.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Stat the managed .local/bin/herdr symlink
+  ansible.builtin.stat:
+    path: "{{ factory_local_bin }}/herdr"
+    follow: false
+    get_checksum: false
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  register: factory_herdr_link
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert the managed symlink resolves to the locked executable
+  ansible.builtin.assert:
+    that:
+      - factory_herdr_link.stat.exists | default(false)
+      - (factory_herdr_link.stat.lnk_source | default('')) == factory_herdr_bin
+    fail_msg: >-
+      {{ factory_local_bin }}/herdr resolves to
+      "{{ factory_herdr_link.stat.lnk_source | default('(missing)') }}" instead
+      of {{ factory_herdr_bin }}. Interactive CLI and the user service would run
+      different builds; the installer owns this symlink.
+    quiet: true
+  when: not ansible_check_mode

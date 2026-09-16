@@ -1,0 +1,81 @@
+---
+# Herdr static configuration and the per-user service.
+#
+# The unit runs the exact locked build by absolute versioned path, so neither
+# $PATH nor a stale /usr/local/bin copy can shadow it (the source host ran a
+# 0.8.2 service against a 0.9.0 CLI; that drift is designed out here).
+
+- name: Ensure the Herdr configuration directory
+  ansible.builtin.file:
+    path: "{{ factory_herdr_config_dir }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0700"
+  become: true
+
+- name: Render the Herdr static configuration
+  ansible.builtin.template:
+    src: herdr.toml.j2
+    dest: "{{ factory_herdr_config }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0600"
+  become: true
+  notify: restart herdr
+
+- name: Render the Herdr user unit
+  ansible.builtin.template:
+    src: herdr.service.j2
+    dest: "{{ factory_user_units }}/herdr.service"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  notify:
+    - reload user systemd
+    - restart herdr
+
+- name: Ensure the user default.target.wants directory
+  ansible.builtin.file:
+    path: "{{ factory_user_units }}/default.target.wants"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+
+# Static enablement: a plain symlink is exactly what `systemctl --user enable`
+# creates for WantedBy=default.target, and it works in an image build where no
+# user manager is running. When start_services is true the systemd task below
+# sees the unit as already enabled and reports no change.
+- name: Statically enable the Herdr user unit
+  ansible.builtin.file:
+    src: "{{ factory_user_units }}/herdr.service"
+    dest: "{{ factory_user_units }}/default.target.wants/herdr.service"
+    state: link
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    force: true
+    follow: false
+  become: true
+
+- name: Enable and start the Herdr user service
+  ansible.builtin.systemd_service:
+    scope: user
+    name: herdr.service
+    enabled: true
+    state: started
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_systemd_env }}"
+  when: factory_manage_services | bool
+
+- name: Report the deferred service start
+  ansible.builtin.debug:
+    msg: >-
+      start_services is false: herdr.service is written and statically enabled
+      at {{ factory_user_units }}/herdr.service but not started. It comes up on
+      the first boot of a host that has lingering enabled for
+      {{ factory_cfg.user }}.
+  when: not (factory_manage_services | bool)

@@ -1,0 +1,23 @@
+# Code Factory - NoCloud seed metadata.
+#
+# Only needed for the NoCloud datasource (seed ISO or a vfat filesystem
+# labelled CIDATA), where cloud-init requires a file named exactly
+# `meta-data` next to `user-data`. Clouds and hypervisors that supply their
+# own metadata service ignore this file entirely - paste only user-data there.
+#
+#   cp cloud-init/meta-data.yaml seed/meta-data
+#   cp cloud-init/user-data.yaml seed/user-data
+#   genisoimage -output seed.iso -volid CIDATA -joliet -rock seed/
+#
+# instance-id identifies this deployment to cloud-init: changing it makes
+# cloud-init treat the next boot as a new instance and run the prerequisites
+# again. Give each machine its own value.
+instance-id: code-factory-0001
+
+# No hostname is imposed here. Uncomment and set it if you want cloud-init to
+# name the machine instead of keeping the image default.
+# local-hostname: <your-host-name>
+
+# No public keys, no passwords, no network configuration and no provider
+# metadata belong in this file. Host access is arranged through your
+# platform's own key mechanism before first boot (docs/security.md).

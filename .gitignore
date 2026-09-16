@@ -1,0 +1,30 @@
+# Machine-local inventory and credentials are never export inputs.
+.local/
+.venv/
+.env
+.env.*
+!.env.example
+*.age
+*.pem
+*.key
+*.p12
+*.pfx
+*.tfstate
+*.tfstate.*
+.terraform/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.cache/
+dist/
+artifacts/
+# Never check in runtime browser, agent, or database state.
+.vnc-chrome-profile/
+.chrome-devtools-axi/
+.omp/
+.pi/
+.claude/
+.codex/
+.ssh/

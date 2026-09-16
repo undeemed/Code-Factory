@@ -1,0 +1,276 @@
+---
+# Firstmate: pinned public clone plus its gitignored dispatch settings.
+#
+# Safety rules (contract + docs/security.md):
+#   * a fresh clone ends on branch `main` at the pinned revision - never a
+#     detached HEAD, which breaks Firstmate's own git handling
+#   * an existing checkout is never force-checked-out, reset, stashed or
+#     cleaned. Dirty, diverged or independently advanced trees are refused and
+#     the play stops so a human can look
+#   * a clean checkout strictly behind the pin on `main` is fast-forwarded only
+#   * provisioning never runs Firstmate startup or fleet restore
+
+- name: Check for an existing Firstmate checkout
+  ansible.builtin.stat:
+    path: "{{ factory_firstmate_dir }}/.git"
+    get_checksum: false
+  become: true
+  register: factory_fm_git
+  changed_when: false
+  check_mode: false
+
+- name: Report the Firstmate clone that check mode cannot preview
+  ansible.builtin.debug:
+    msg: >-
+      check mode: would clone {{ factory_cfg.firstmate.url }} into
+      {{ factory_firstmate_dir }} with main at
+      {{ factory_cfg.firstmate.revision }}.
+  when:
+    - ansible_check_mode
+    - not factory_fm_git.stat.exists
+
+# --- fresh clone ------------------------------------------------------------
+
+- name: Clone Firstmate at the pinned revision
+  ansible.builtin.git:
+    repo: "{{ factory_cfg.firstmate.url }}"
+    dest: "{{ factory_firstmate_dir }}"
+    version: "{{ factory_cfg.firstmate.revision }}"
+    update: false
+    force: false
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  register: factory_fm_clone
+  when:
+    - not factory_fm_git.stat.exists
+    - not ansible_check_mode
+
+# ansible.builtin.git leaves a revision checkout detached. The clone was
+# created moments ago by this task run and contains no work, so naming the
+# branch here cannot destroy anything.
+- name: Put the fresh clone on branch main at the pinned revision
+  ansible.builtin.command:
+    argv: [git, -C, "{{ factory_firstmate_dir }}", checkout, -B, main, "{{ factory_cfg.firstmate.revision }}"]
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  changed_when: true
+  when: factory_fm_clone.changed | default(false)
+
+- name: Track origin/main from the fresh clone
+  ansible.builtin.command:
+    argv: [git, -C, "{{ factory_firstmate_dir }}", branch, --set-upstream-to=origin/main, main]
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  changed_when: true
+  failed_when: false
+  when: factory_fm_clone.changed | default(false)
+
+# --- existing checkout: inspect, then refuse or fast-forward ----------------
+
+- name: Inspect the existing checkout
+  when: factory_fm_git.stat.exists
+  block:
+    - name: Read the checked out revision
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", rev-parse, HEAD]
+      register: factory_fm_head
+      changed_when: false
+      check_mode: false
+
+    - name: Read the current branch
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", rev-parse, --abbrev-ref, HEAD]
+      register: factory_fm_branch
+      changed_when: false
+      check_mode: false
+
+    - name: Read the working tree status
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", status, --porcelain, --untracked-files=no]
+      register: factory_fm_status
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse to touch a dirty checkout
+      ansible.builtin.assert:
+        that:
+          - (factory_fm_status.stdout | trim) | length == 0
+        fail_msg: >-
+          {{ factory_firstmate_dir }} has uncommitted changes. Provisioning
+          never resets, stashes or cleans existing work. Commit, push or move
+          the changes, then re-run.
+        quiet: true
+
+    - name: Check whether the pinned revision is present locally
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", cat-file, -e, "{{ factory_cfg.firstmate.revision }}^{commit}"]
+      register: factory_fm_have_rev
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Fetch origin when the pinned revision is unknown locally
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", fetch, --quiet, origin]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      # A fetch updates remote-tracking refs only; the working tree and local
+      # branches are untouched, so this is not a change to report.
+      changed_when: false
+      check_mode: false
+      when: factory_fm_have_rev.rc != 0
+
+    - name: Confirm the pinned revision exists after fetching
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", cat-file, -e, "{{ factory_cfg.firstmate.revision }}^{commit}"]
+      register: factory_fm_have_rev_final
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: factory_fm_have_rev.rc != 0
+
+    - name: Assert the pinned revision is reachable
+      ansible.builtin.assert:
+        that:
+          - (factory_fm_have_rev_final.rc | default(factory_fm_have_rev.rc)) == 0
+        fail_msg: >-
+          Revision {{ factory_cfg.firstmate.revision }} is not in
+          {{ factory_firstmate_dir }} even after fetching origin. Check the pin
+          in the configuration document and the remote.
+        quiet: true
+
+    - name: Test whether the checkout is at or beyond the pin
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", merge-base, --is-ancestor, "{{ factory_cfg.firstmate.revision }}", HEAD]
+      register: factory_fm_pin_is_ancestor
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Test whether the checkout is behind the pin
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", merge-base, --is-ancestor, HEAD, "{{ factory_cfg.firstmate.revision }}"]
+      register: factory_fm_head_is_ancestor
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Classify the existing checkout
+      ansible.builtin.set_fact:
+        factory_fm_at_pin: "{{ (factory_fm_head.stdout | trim) == factory_cfg.firstmate.revision }}"
+        factory_fm_behind: "{{ factory_fm_head_is_ancestor.rc == 0 and factory_fm_pin_is_ancestor.rc != 0 }}"
+        factory_fm_advanced: "{{ factory_fm_pin_is_ancestor.rc == 0 and factory_fm_head_is_ancestor.rc != 0 }}"
+        factory_fm_on_main: "{{ (factory_fm_branch.stdout | trim) == 'main' }}"
+
+    - name: Refuse an independently advanced checkout
+      ansible.builtin.assert:
+        that:
+          - not (factory_fm_advanced | bool)
+        fail_msg: >-
+          {{ factory_firstmate_dir }} is at {{ factory_fm_head.stdout | trim }},
+          which already contains the pinned revision
+          {{ factory_cfg.firstmate.revision }}. Moving it backwards would
+          discard work; update factory.firstmate.revision instead.
+        quiet: true
+
+    - name: Refuse a diverged checkout
+      ansible.builtin.assert:
+        that:
+          - (factory_fm_at_pin | bool) or (factory_fm_behind | bool)
+        fail_msg: >-
+          {{ factory_firstmate_dir }} at {{ factory_fm_head.stdout | trim }} has
+          diverged from the pinned revision
+          {{ factory_cfg.firstmate.revision }}. Reconcile the branch by hand;
+          provisioning will not force, reset or merge it.
+        quiet: true
+
+    - name: Refuse to fast-forward a branch other than main
+      ansible.builtin.assert:
+        that:
+          - factory_fm_on_main | bool
+        fail_msg: >-
+          {{ factory_firstmate_dir }} is behind the pin but checked out on
+          "{{ factory_fm_branch.stdout | trim }}" instead of main. Switch to
+          main yourself; provisioning will not move another branch or a
+          detached HEAD.
+        quiet: true
+      when: factory_fm_behind | bool
+
+    - name: Fast-forward main to the pinned revision
+      ansible.builtin.command:
+        argv: [git, -C, "{{ factory_firstmate_dir }}", merge, --ff-only, "{{ factory_cfg.firstmate.revision }}"]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      changed_when: true
+      when:
+        - factory_fm_behind | bool
+        - factory_fm_on_main | bool
+        - not ansible_check_mode
+
+    - name: Note a detached checkout that already matches the pin
+      ansible.builtin.debug:
+        msg: >-
+          {{ factory_firstmate_dir }} matches the pin but HEAD is detached
+          ({{ factory_fm_branch.stdout | trim }}). Firstmate expects a named
+          branch; run `git checkout main` there when convenient. Provisioning
+          does not change an existing checkout's branch.
+      when:
+        - factory_fm_at_pin | bool
+        - not (factory_fm_on_main | bool)
+
+# --- gitignored dispatch settings ------------------------------------------
+# Firstmate already ignores these paths inside its own checkout, so writing
+# them leaves the working tree clean and no .gitignore is edited.
+
+- name: Deploy Firstmate dispatch settings
+  when: factory_fm_git.stat.exists or not ansible_check_mode
+  block:
+    - name: Ensure the Firstmate config directory
+      ansible.builtin.file:
+        path: "{{ factory_firstmate_dir }}/config"
+        state: directory
+        owner: "{{ factory_cfg.user }}"
+        group: "{{ factory_group }}"
+      become: true
+
+    - name: Stat the Firstmate config sources
+      ansible.builtin.stat:
+        path: "{{ code_factory_repo }}/config/{{ item }}"
+        get_checksum: false
+      loop: "{{ factory_firstmate_config_names }}"
+      register: factory_fm_src_stat
+      changed_when: false
+      check_mode: false
+
+    - name: Stat the Firstmate config destinations
+      ansible.builtin.stat:
+        path: "{{ factory_firstmate_dir }}/config/{{ item }}"
+        get_checksum: false
+      become: true
+      loop: "{{ factory_firstmate_config_names }}"
+      register: factory_fm_dest_stat
+      changed_when: false
+      check_mode: false
+
+    - name: Write the Firstmate dispatch settings
+      ansible.builtin.copy:
+        # A trailing slash copies directory contents; plain files copy as-is.
+        src: "{{ code_factory_repo }}/config/{{ item.0.item }}{{ '/' if item.0.stat.isdir else '' }}"
+        dest: "{{ factory_firstmate_dir }}/config/{{ item.0.item }}"
+        owner: "{{ factory_cfg.user }}"
+        group: "{{ factory_group }}"
+        mode: "{{ '0600' if not item.0.stat.isdir else omit }}"
+        directory_mode: "{{ '0700' if item.0.stat.isdir else omit }}"
+        remote_src: true
+      become: true
+      loop: "{{ factory_fm_src_stat.results | zip(factory_fm_dest_stat.results) | list }}"
+      loop_control:
+        label: "{{ item.0.item }}"
+      when: >-
+        not (factory_firstmate_config_first_write | bool)
+        or not (item.1.stat.exists | default(false))

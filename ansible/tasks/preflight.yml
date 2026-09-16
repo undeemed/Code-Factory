@@ -1,0 +1,120 @@
+---
+# Fail fast, before anything is touched: configuration shape, supported
+# platform, and the presence of every Main-owned input this run consumes.
+
+- name: Assert the configuration document matches the contract
+  ansible.builtin.assert:
+    that:
+      - (schema_version | default(1) | int) == 1
+      - factory_cfg.user is string
+      - factory_cfg.user | length > 0
+      - factory_cfg.home is match('^/')
+      - factory_cfg.workspace is match('^/')
+      - factory_cfg.home not in ['/', '/root', '/home']
+      - factory_cfg.profiles is mapping
+      - factory_cfg.herdr is mapping
+      - factory_cfg.browser_prune is mapping
+      - factory_cfg.firstmate is mapping
+      - factory_cfg.desktop is mapping
+    fail_msg: >-
+      The `factory` extra vars are not a valid Code Factory configuration
+      document (schema_version 1, absolute home/workspace, profile mapping).
+      Run `./factory validate` first.
+    quiet: true
+
+- name: Assert the host is a supported Ubuntu release
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version in factory_supported_ubuntu_releases
+    fail_msg: >-
+      Code Factory targets Ubuntu {{ factory_supported_ubuntu_releases | join(' / ') }};
+      this host reports {{ ansible_distribution }} {{ ansible_distribution_version }}.
+      Set factory_allow_unsupported_os=true to override deliberately.
+    quiet: true
+  when: not (factory_allow_unsupported_os | bool)
+
+- name: Assert the CPU architecture has pinned toolchain assets
+  ansible.builtin.assert:
+    that:
+      - factory_platform | length > 0
+      - factory_deb_arch | length > 0
+    fail_msg: >-
+      Architecture {{ ansible_architecture }} is not supported. The lock ships
+      linux-x86_64 and linux-aarch64 assets only.
+    quiet: true
+
+- name: Build the list of Main-owned inputs this run requires
+  ansible.builtin.set_fact:
+    factory_required_inputs: >-
+      {{ [factory_installer, factory_lock_file]
+         + (factory_agent_config_files
+            | map(attribute='src')
+            | map('regex_replace', '^', code_factory_repo ~ '/')
+            | list
+            if (factory_cfg.profiles.agents | bool) else [])
+         + ([factory_pruner_source, factory_pruner_requirements]
+            if ((factory_cfg.profiles.agents | bool)
+                and (factory_cfg.browser_prune.enabled | bool)) else [])
+         + (factory_firstmate_config_names
+            | map('regex_replace', '^', code_factory_repo ~ '/config/')
+            | list
+            if (factory_cfg.profiles.firstmate | bool) else []) }}
+
+- name: Stat every required input
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop: "{{ factory_required_inputs }}"
+  loop_control:
+    label: "{{ item | relpath(code_factory_repo) }}"
+  register: factory_input_stat
+  check_mode: false
+
+- name: Fail when a contract input is missing
+  ansible.builtin.assert:
+    that:
+      - factory_input_stat.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Missing Main-owned contract inputs:
+      {{ factory_input_stat.results | rejectattr('stat.exists')
+         | map(attribute='item') | list | join(', ') }}.
+      These are supplied by the repository, not by this playbook; provisioning
+      stops rather than degrading silently.
+    quiet: true
+
+- name: Assert the lock pins a Herdr version
+  ansible.builtin.assert:
+    that:
+      - factory_herdr_version is string
+      - factory_herdr_version | length > 0
+    fail_msg: >-
+      {{ factory_lock_file }} has no tools.herdr.version. The unit ExecStart is
+      computed from the lock; there is no fallback version.
+    quiet: true
+
+- name: Assert the pruner requirements pin an exact psutil release
+  ansible.builtin.assert:
+    that:
+      - factory_pruner_psutil_version | length > 0
+      - factory_pruner_requirements_text is search('--hash=sha256:')
+    fail_msg: >-
+      {{ factory_pruner_requirements }} must pin psutil with `psutil==<version>`
+      and carry --hash=sha256: entries. The pruner runtime is installed with
+      `uv pip install --require-hashes`; an unpinned or unhashed requirement is
+      refused instead of being installed loosely.
+    quiet: true
+  when:
+    - factory_cfg.profiles.agents | bool
+    - factory_cfg.browser_prune.enabled | bool
+
+- name: Show the resolved provisioning plan
+  ansible.builtin.debug:
+    msg:
+      - "account            : {{ factory_cfg.user }} (home {{ factory_cfg.home }}, workspace {{ factory_cfg.workspace }})"
+      - "platform           : {{ ansible_distribution }} {{ ansible_distribution_version }} {{ ansible_architecture }} -> {{ factory_platform }} / {{ factory_deb_arch }}"
+      - "herdr              : {{ factory_herdr_version }} at {{ factory_herdr_bin }}"
+      - "profiles           : {{ factory_cfg.profiles | dict2items | selectattr('value') | map(attribute='key') | list | join(', ') | default('none', true) }}"
+      - "services           : start_services={{ factory_cfg.start_services }} linger={{ factory_manage_linger }}"
+      - "pruner runtime     : {{ ('psutil ' ~ factory_pruner_psutil_version ~ ' in ' ~ factory_pruner_venv) if ((factory_cfg.profiles.agents | bool) and (factory_cfg.browser_prune.enabled | bool)) else 'disabled' }}"
+      - "check mode         : {{ ansible_check_mode }}"

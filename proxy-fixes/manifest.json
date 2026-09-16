@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "headroom": {
+    "version": "0.36.3",
+    "files": {
+      "headroom/proxy/body_forwarding.py": {
+        "before": "b603d68ec093dbe898bbf2cad47899bd1caed8a150a117d86b3b8fba7d2c1fa8",
+        "after": "75a61a37434616635f4acba1911d08319c0fda09f38810c693074ac6765dd915"
+      }
+    }
+  },
+  "pxpipe": {
+    "version": "0.13.1",
+    "source_commit": "ffbb0d8df4b0b11f9191605a2f81e054fc072b02",
+    "files": {
+      "dist/node.js": {
+        "before": "9e290cb798f1032f258d433f5d9f2c72b8a083f5add88c4bd9cb05b22e962998",
+        "after": "57a250bdb7921d72e301c2d564d81e43969a3746a8a2854bf4b92fd9cb286744"
+      },
+      "dist/core/transform.js": {
+        "before": "bc1d52792e43fbf4187ff5cda14423b2b2d6e638d8d1ce82ac3ec46fd3dc7c30",
+        "after": "ca4432e15858b8d567213649208e5cbddd9462a233a2d8d58d03629f9d090c8a"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+---
+# Code Factory provisions the machine it runs on. There is exactly one host.
+#
+# ansible_python_interpreter is pinned to the system interpreter on purpose:
+# ansible.builtin.apt imports python3-apt / python3-apt's apt_pkg, which only
+# exists for /usr/bin/python3. Running the playbook from the uv virtualenv is
+# still correct - only the module-side interpreter is pinned here.
+all:
+  children:
+    code_factory:
+      hosts:
+        localhost:
+          ansible_connection: local
+          ansible_python_interpreter: /usr/bin/python3

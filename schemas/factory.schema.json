@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/undeemed/Code-Factory/schemas/factory.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "factory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+        },
+        "home": {
+          "type": "string",
+          "pattern": "^/home/[A-Za-z0-9_./-]+$"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^/home/[A-Za-z0-9_./-]+$"
+        },
+        "start_services": {
+          "type": "boolean"
+        },
+        "enable_linger": {
+          "type": "boolean"
+        },
+        "profiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agents": {
+              "type": "boolean"
+            },
+            "development": {
+              "type": "boolean"
+            },
+            "firstmate": {
+              "type": "boolean"
+            },
+            "docker": {
+              "type": "boolean"
+            },
+            "tailscale": {
+              "type": "boolean"
+            },
+            "desktop": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agents",
+            "development",
+            "firstmate",
+            "docker",
+            "tailscale",
+            "desktop"
+          ]
+        },
+        "herdr": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "theme": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "toast_delivery": {
+              "enum": [
+                "off",
+                "herdr",
+                "terminal",
+                "system"
+              ]
+            },
+            "agent_panel_sort": {
+              "enum": [
+                "spaces",
+                "priority"
+              ]
+            },
+            "headless_cols": {
+              "type": "integer",
+              "minimum": 40,
+              "maximum": 500
+            },
+            "headless_rows": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "theme",
+            "toast_delivery",
+            "agent_panel_sort",
+            "headless_cols",
+            "headless_rows"
+          ]
+        },
+        "browser_prune": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "idle_seconds": {
+              "type": "integer",
+              "minimum": 600,
+              "maximum": 604800
+            },
+            "poll_seconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 3600
+            },
+            "max_gap_seconds": {
+              "type": "integer",
+              "minimum": 120,
+              "maximum": 86400
+            }
+          },
+          "required": [
+            "enabled",
+            "idle_seconds",
+            "poll_seconds",
+            "max_gap_seconds"
+          ]
+        },
+        "firstmate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "url",
+            "revision"
+          ]
+        },
+        "desktop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "display": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9
+            },
+            "novnc_port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535
+            },
+            "geometry": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{2,3}x[1-9][0-9]{2,3}$"
+            }
+          },
+          "required": [
+            "display",
+            "novnc_port",
+            "geometry"
+          ]
+        }
+      },
+      "required": [
+        "user",
+        "home",
+        "workspace",
+        "start_services",
+        "enable_linger",
+        "profiles",
+        "herdr",
+        "browser_prune",
+        "firstmate",
+        "desktop"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "factory"
+  ]
+}

@@ -1,0 +1,48 @@
+--- a/dist/node.js
++++ b/dist/node.js
+@@ -4826,6 +4826,18 @@
+     req = JSON.parse(new TextDecoder().decode(body));
+   } catch (e) {
+     info.reason = `parse_error: ${e.message}`;
++    return { body, info };
++  }
++  const thinking = req?.thinking;
++  const thinkingEnabled = thinking !== null && typeof thinking === "object" && ("type" in thinking && (thinking.type === "adaptive" || thinking.type === "enabled") || "block_binding" in thinking);
++  const carriesThinking = Array.isArray(req?.messages) && req.messages.some((message) => {
++    const content = message?.content;
++    return Array.isArray(content) && content.some(
++      (block) => block !== null && typeof block === "object" && "type" in block && (block.type === "thinking" || block.type === "redacted_thinking")
++    );
++  });
++  if (thinkingEnabled || carriesThinking) {
++    info.reason = "preserved_thinking_context";
+     return { body, info };
+   }
+   info.nativeImages = countNativeImages(req.messages);
+--- a/dist/core/transform.js
++++ b/dist/core/transform.js
+@@ -1537,6 +1537,24 @@
+     }
+     catch (e) {
+         info.reason = `parse_error: ${e.message}`;
++        return { body, info };
++    }
++    // Preserved thinking signs the system, tools and preceding messages, not
++    // just the opaque thinking block. Rewriting any prefix breaks continuation.
++    // Protect the first thinking-enabled request too: its response will be bound
++    // to this prefix before the client has any signed blocks to echo.
++    const thinking = req?.thinking;
++    const thinkingEnabled = thinking !== null && typeof thinking === 'object'
++        && (('type' in thinking && (thinking.type === 'adaptive' || thinking.type === 'enabled'))
++            || 'block_binding' in thinking);
++    const carriesThinking = Array.isArray(req?.messages) && req.messages.some((message) => {
++        // Reasoning is opaque input, outside the transformer's text/image model.
++        const content = message?.content;
++        return Array.isArray(content) && content.some((block) => block !== null && typeof block === 'object' && 'type' in block
++            && (block.type === 'thinking' || block.type === 'redacted_thinking'));
++    });
++    if (thinkingEnabled || carriesThinking) {
++        info.reason = 'preserved_thinking_context';
+         return { body, info };
+     }
+     // Price the caller's OWN images before we rewrite anything: they occupy the

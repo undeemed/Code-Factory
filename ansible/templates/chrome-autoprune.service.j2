@@ -1,0 +1,23 @@
+{{ ansible_managed | comment }}
+# Triggered by chrome-autoprune.timer; not enabled on its own.
+#
+# The interpreter is the account's private pruner runtime, which carries the
+# hash-pinned psutil {{ factory_pruner_psutil_version }} the pruner needs for
+# Process.net_connections(). Only paths under the account's home are
+# referenced, so this unit keeps working without the repository checkout.
+
+[Unit]
+Description=Prune idle Chrome AXI bridge processes (Code Factory managed)
+ConditionPathExists={{ factory_pruner_script }}
+ConditionPathExists={{ factory_pruner_python }}
+
+[Service]
+Type=oneshot
+# The managed bin directory comes first so the pruner sees the pinned Node and
+# AXI command wrappers the installer linked there.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_pruner_python }} {{ factory_pruner_script }} {{ factory_prune_exec_args | join(' ') }}
+TimeoutStartSec={{ factory_prune_timeout_seconds | int }}
+Nice=10
+IOSchedulingClass=idle
+UMask=0077

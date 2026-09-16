@@ -1,0 +1,47 @@
+---
+# Ubuntu prerequisites. Only distribution packages here; every pinned tool
+# comes from the repository installer (tasks/tools.yml).
+#
+# The cache refresh is marked unchanged on purpose: refreshing package metadata
+# is not a change to the machine, and a second apply must report changed=0.
+
+- name: Check that apt package indexes exist
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    patterns: "*_Packages*"
+    file_type: file
+    recurse: false
+  register: factory_apt_indexes
+
+- name: Explain an incomplete package preview
+  ansible.builtin.debug:
+    msg: "APT indexes are absent. Apply will download them before resolving packages; check mode leaves the host unchanged."
+  when: ansible_check_mode and factory_apt_indexes.matched == 0
+
+- name: Refresh the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ factory_apt_cache_valid_time if factory_apt_indexes.matched > 0 else 0 }}"
+  become: true
+  changed_when: false
+
+- name: Install base prerequisites
+  ansible.builtin.apt:
+    name: "{{ factory_base_packages }}"
+    state: present
+  become: true
+  when: not ansible_check_mode or factory_apt_indexes.matched > 0
+
+- name: Install development prerequisites
+  ansible.builtin.apt:
+    name: "{{ factory_development_packages }}"
+    state: present
+  become: true
+  when:
+    - factory_cfg.profiles.development | bool
+    - not ansible_check_mode or factory_apt_indexes.matched > 0
+
+# The browser pruner needs psutil >= 6 for Process.net_connections(); Ubuntu
+# 24.04 ships 5.9. It therefore gets a hash-pinned private virtualenv in
+# tasks/browser_prune.yml instead of a distribution package, and nothing here
+# installs into /usr/bin/python3's site-packages.

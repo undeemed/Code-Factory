@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "tools": {
+      "type": "object",
+      "minProperties": 4,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "assets": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "linux-x86_64": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "pattern": "^https://[^ @]+$"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "format": {
+                    "enum": [
+                      "file",
+                      "tar",
+                      "zip"
+                    ]
+                  },
+                  "binaries": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z0-9_.-]+$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": [
+                  "url",
+                  "sha256",
+                  "format",
+                  "binaries"
+                ]
+              },
+              "linux-aarch64": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "pattern": "^https://[^ @]+$"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "format": {
+                    "enum": [
+                      "file",
+                      "tar",
+                      "zip"
+                    ]
+                  },
+                  "binaries": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z0-9_.-]+$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": [
+                  "url",
+                  "sha256",
+                  "format",
+                  "binaries"
+                ]
+              }
+            },
+            "required": [
+              "linux-x86_64",
+              "linux-aarch64"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "assets"
+        ]
+      }
+    },
+    "npm_required_tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "rust_toolchain": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tools",
+    "npm_required_tools",
+    "rust_toolchain"
+  ]
+}

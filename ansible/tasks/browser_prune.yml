@@ -1,0 +1,198 @@
+---
+# Chrome AXI bridge pruning: portable pruner plus a user timer.
+#
+# The pruner only signals idle, installed AXI bridge processes with loopback
+# listeners. It never touches headed, attached or persistent-profile browsers,
+# which is why the persistent VNC profile is safe next to it. Native only: it
+# needs host pidfds and process trees.
+#
+# Runtime: the pruner calls psutil.Process.net_connections(), which needs
+# psutil >= 6, while Ubuntu 24.04 ships python3-psutil 5.9. It therefore runs
+# on an account-owned virtualenv created by the managed uv and filled from
+# maintenance/requirements.txt with --require-hashes. The distribution
+# interpreter is never pip-installed into, and the unit only references paths
+# under the account's home, so the timer survives deletion of this checkout.
+
+- name: Report the pruner runtime that check mode cannot build
+  ansible.builtin.debug:
+    msg: >-
+      check mode: would provide psutil {{ factory_pruner_psutil_version }} in
+      {{ factory_pruner_venv }} via {{ factory_uv_bin }} and
+      {{ factory_pruner_requirements | relpath(code_factory_repo) }}.
+  when: ansible_check_mode
+
+- name: Build the private pruner runtime
+  when: not ansible_check_mode
+  block:
+    - name: Stat the managed uv the runtime is built with
+      ansible.builtin.stat:
+        path: "{{ factory_uv_bin }}"
+        get_checksum: false
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      register: factory_prune_uv
+      changed_when: false
+
+    - name: Assert uv is available for the pruner runtime
+      ansible.builtin.assert:
+        that:
+          - factory_prune_uv.stat.exists | default(false)
+        fail_msg: >-
+          {{ factory_uv_bin }} is missing, so the hash-pinned pruner runtime
+          cannot be built. uv is a core tool of the installer
+          (factory_core_tools); fix tasks/tools.yml output before re-running.
+          Provisioning refuses to fall back to the distribution psutil, which
+          is too old for the pruner.
+        quiet: true
+
+    - name: Read the runtime stamp of a previous apply
+      ansible.builtin.slurp:
+        src: "{{ factory_pruner_stamp }}"
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      register: factory_prune_stamp_raw
+      # A first apply has no stamp; that is not a failure, it just means the
+      # runtime has to be built.
+      failed_when: false
+      changed_when: false
+
+    - name: Read the psutil release already installed in the runtime
+      ansible.builtin.command:
+        argv: ["{{ factory_pruner_python }}", -c, "import psutil; print(psutil.__version__)"]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      register: factory_prune_installed
+      failed_when: false
+      changed_when: false
+
+    - name: Decide whether the runtime already matches the pinned requirements
+      ansible.builtin.set_fact:
+        factory_prune_runtime_current: >-
+          {{ (factory_prune_installed.rc | default(1)) == 0
+             and (factory_prune_installed.stdout | default('') | trim) == factory_pruner_psutil_version
+             and ((factory_prune_stamp_raw.content | default('') | b64decode)
+                  is search(factory_pruner_requirements_digest)) }}
+
+    - name: Create the private pruner virtualenv
+      ansible.builtin.command:
+        argv: ["{{ factory_uv_bin }}", venv, --python, "{{ factory_pruner_base_python }}", "{{ factory_pruner_venv }}"]
+        chdir: "{{ factory_cfg.home }}"
+        creates: "{{ factory_pruner_python }}"
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env | combine(factory_pruner_uv_env) }}"
+      notify: restart chrome autoprune timer
+
+    - name: Install the hash-pinned pruner requirements
+      ansible.builtin.command:
+        argv:
+          - "{{ factory_uv_bin }}"
+          - pip
+          - install
+          - --require-hashes
+          - --python
+          - "{{ factory_pruner_python }}"
+          - -r
+          - "{{ factory_pruner_requirements }}"
+        chdir: "{{ factory_cfg.home }}"
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env | combine(factory_pruner_uv_env) }}"
+      changed_when: true
+      when: not (factory_prune_runtime_current | bool)
+      notify: restart chrome autoprune timer
+
+    - name: Confirm the runtime provides the pinned psutil
+      ansible.builtin.command:
+        argv: ["{{ factory_pruner_python }}", -c, "import psutil; print(psutil.__version__)"]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      register: factory_prune_verified
+      changed_when: false
+
+    - name: Assert the runtime psutil matches the pin
+      ansible.builtin.assert:
+        that:
+          - (factory_prune_verified.stdout | trim) == factory_pruner_psutil_version
+        fail_msg: >-
+          {{ factory_pruner_python }} reports psutil
+          "{{ factory_prune_verified.stdout | trim }}" but
+          {{ factory_pruner_requirements | relpath(code_factory_repo) }} pins
+          {{ factory_pruner_psutil_version }}. The pruner needs
+          Process.net_connections() (psutil >= 6); it is not run against an
+          unexpected build.
+        quiet: true
+
+    - name: Record the runtime stamp
+      ansible.builtin.copy:
+        dest: "{{ factory_pruner_stamp }}"
+        owner: "{{ factory_cfg.user }}"
+        group: "{{ factory_group }}"
+        mode: "0644"
+        content: |
+          {
+            "psutil": "{{ factory_pruner_psutil_version }}",
+            "requirements_sha256": "{{ factory_pruner_requirements_digest }}"
+          }
+      become: true
+
+# The unit calls this script with the private runtime interpreter, so the
+# script's own `#!/usr/bin/python3` shebang is never the one that runs it.
+- name: Install the portable Chrome pruner
+  ansible.builtin.copy:
+    src: "{{ factory_pruner_source }}"
+    dest: "{{ factory_pruner_script }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+    remote_src: true
+  become: true
+  notify: restart chrome autoprune timer
+
+- name: Render the Chrome pruner unit and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ factory_user_units }}/{{ item }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop:
+    - chrome-autoprune.service
+    - chrome-autoprune.timer
+  notify:
+    - reload user systemd
+    - restart chrome autoprune timer
+
+- name: Ensure the user timers.target.wants directory
+  ansible.builtin.file:
+    path: "{{ factory_user_units }}/timers.target.wants"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+
+- name: Statically enable the Chrome pruner timer
+  ansible.builtin.file:
+    src: "{{ factory_user_units }}/chrome-autoprune.timer"
+    dest: "{{ factory_user_units }}/timers.target.wants/chrome-autoprune.timer"
+    state: link
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    force: true
+    follow: false
+  become: true
+
+- name: Enable and start the Chrome pruner timer
+  ansible.builtin.systemd_service:
+    scope: user
+    name: chrome-autoprune.timer
+    enabled: true
+    state: started
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_systemd_env }}"
+  when: factory_manage_services | bool

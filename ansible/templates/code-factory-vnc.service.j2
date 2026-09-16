@@ -1,0 +1,22 @@
+{{ ansible_managed | comment }}
+# TigerVNC on display :{{ factory_cfg.desktop.display }}, loopback only.
+# Loopback is host-wide, so RFB authentication is mandatory as well as SSH tunneling.
+# The operator creates the private password file; it is never stored in this repo.
+
+[Unit]
+Description=Code Factory review desktop (TigerVNC :{{ factory_cfg.desktop.display }}, loopback only)
+Documentation=https://github.com/TigerVNC/tigervnc/wiki/Secure-your-connection
+ConditionPathExists={{ factory_vnc_password_file }}
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# An occupied display must fail, never kill another desktop to claim its slot.
+ExecStart=/usr/bin/vncserver :{{ factory_cfg.desktop.display }} -fg -localhost yes -SecurityTypes VncAuth -rfbauth {{ factory_vnc_password_file }} -xstartup {{ factory_vnc_dir }}/xstartup -geometry {{ factory_cfg.desktop.geometry }} -depth 24
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

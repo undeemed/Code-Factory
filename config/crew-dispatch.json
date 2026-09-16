@@ -1,0 +1,8 @@
+{
+  "rules": [],
+  "default": {
+    "harness": "pi",
+    "model": "claude-opus-5",
+    "effort": "xhigh"
+  }
+}

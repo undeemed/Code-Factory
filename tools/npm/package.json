@@ -1,0 +1,18 @@
+{
+  "name": "code-factory-agent-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned agent and Firstmate CLI tools; no credentials",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@oh-my-pi/pi-coding-agent": "18.1.13",
+    "@openai/codex": "0.147.0",
+    "chrome-devtools-axi": "0.1.29",
+    "chrome-devtools-mcp": "1.9.0",
+    "gh-axi": "0.1.30",
+    "lavish-axi": "0.1.52",
+    "pnpm": "10.33.2",
+    "quota-axi": "0.1.29",
+    "tasks-axi": "0.2.5"
+  }
+}
