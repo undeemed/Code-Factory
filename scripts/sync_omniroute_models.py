@@ -305,7 +305,9 @@ def main(argv=None):
         # combo path (see docs/omniroute-models.md).
         by_name.setdefault(direct["id"], {"description": direct.get("name"), "models": []})
     names = sorted(by_name)
-    recorded = load_effort_cache(args.efforts_cache) | previous_efforts(args.models_yml)
+    # The committed cache is the reviewed measurement, so it wins; whatever the
+    # host already had only fills gaps for combos the cache does not know yet.
+    recorded = previous_efforts(args.models_yml) | load_effort_cache(args.efforts_cache)
 
     if args.no_probe:
         measured = {name: (recorded.get(name, []), "recorded") for name in names}
