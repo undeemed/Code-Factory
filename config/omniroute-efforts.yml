@@ -20,19 +20,19 @@ efforts:
   - high
   - xhigh
   - max
-  cc/claude-fable-5:
+  cc/claude-fable-5-1:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  cc/claude-opus-5:
   - low
   - medium
   - high
   - xhigh
   - max
   deepseek-v4-pro:
-  - low
-  - medium
-  - high
-  - xhigh
-  - max
-  fable-5:
   - low
   - medium
   - high
@@ -73,12 +73,6 @@ efforts:
   - low
   - medium
   - high
-  opus-5:
-  - low
-  - medium
-  - high
-  - xhigh
-  - max
   quality:
   - low
   - medium

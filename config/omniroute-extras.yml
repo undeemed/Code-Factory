@@ -3,10 +3,10 @@
 # A combo exists to pool one model across several providers. When a model lives
 # on a single provider, the router already rotates that provider's connections
 # (both Claude Max accounts, for example), so the plain id is equivalent — and
-# for Claude Fable 5 it is strictly better: the combo path returns
+# for the Claude models it is strictly better: the combo path returns
 # `502 quality validation — streaming upstream error` on streaming requests,
-# which every omp turn is, while the direct id streams reliably (4/4 verified
-# 2026-09-17). See docs/omniroute-models.md.
+# which every omp turn is, while the direct id streams reliably (verified 3/3
+# for Fable 5.1 on 2026-09-17). See docs/omniroute-models.md.
 models:
   # Orphan panes (anything that is not a Firstmate crew or secondmate lane) run
   # on coding-weighted auto routing rather than a pinned model, per the captain
@@ -16,5 +16,18 @@ models:
     name: Best coding (auto-routed across every provider)
   - id: auto/coding:pro
     name: Best coding, premium pool only
-  - id: cc/claude-fable-5
-    name: Claude Fable 5 (all Claude accounts)
+  # Claude goes through direct provider ids, never a combo. A combo wraps the
+  # stream in its own quality validation, and at real agent payload size (full
+  # system prompt + tool schemas) the cc member dies with
+  # `502 quality validation — streaming upstream error` — reproduced through omp
+  # on both opus-5 and fable-5, while the direct ids streamed clean. Both Claude
+  # Max accounts sit under the `cc` provider, so a direct id still pools them.
+  #
+  # Fable 5.1, not Fable 5: the router's fetched Claude catalog only lists
+  # claude-fable-5, so 5.1 is registered as a manual provider model
+  # (`/api/provider-models?provider=claude`, modelId claude-fable-5-1 — bare id,
+  # never prefixed) and claude-fable-5 is hidden for being too slop.
+  - id: cc/claude-opus-5
+    name: Claude Opus 5 (all Claude accounts)
+  - id: cc/claude-fable-5-1
+    name: Claude Fable 5.1 (all Claude accounts)
