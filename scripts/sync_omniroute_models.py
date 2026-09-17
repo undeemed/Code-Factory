@@ -199,6 +199,16 @@ def measure_efforts(router, names, fallbacks, workers=8):
     return results
 
 
+def short_name(name, combo, member_count):
+    """Status-line label: an extras entry names itself, a combo counts its keys."""
+    declared = combo.get("display_name")
+    if declared:
+        return declared
+    if not combo.get("models"):
+        return name
+    return f"{name} ({member_count} keys)" if member_count > 1 else name
+
+
 def build_model_entry(name, combo, catalog, efforts):
     """Describe a combo by what *every* member can honor.
 
@@ -231,7 +241,9 @@ def build_model_entry(name, combo, catalog, efforts):
         output = min(output, context)
     entry = {
         "id": name,
-        "name": combo.get("description") or name,
+        # omp puts this in the status line, so it stays short: the combo name
+        # plus how many keys back it. The full description lives in the router.
+        "name": short_name(name, combo, len(rows)),
         "reasoning": bool(reasoning) or bool(efforts),
         "input": [m for m in ("text", "image") if m in modalities] or ["text"],
         "contextWindow": context,
@@ -303,7 +315,7 @@ def main(argv=None):
         # A model served by exactly one provider already spans that provider's
         # accounts, so it needs no combo — and some models only work outside the
         # combo path (see docs/omniroute-models.md).
-        by_name.setdefault(direct["id"], {"description": direct.get("name"), "models": []})
+        by_name.setdefault(direct["id"], {"display_name": direct.get("name"), "models": []})
     names = sorted(by_name)
     # The committed cache is the reviewed measurement, so it wins; whatever the
     # host already had only fills gaps for combos the cache does not know yet.
