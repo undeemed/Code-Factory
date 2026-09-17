@@ -14,6 +14,8 @@ Rebuild the coding environment around Herdr, Firstmate, OMP, Pi, and their suppo
 - Guarded native browser pruning: five-minute checks, two hours of observed inactivity, active-request and persistent-profile protection.
 - Optional Docker, Tailscale installation, and a loopback-only single-profile XFCE/VNC desktop.
 - Docker/devcontainer worker plus optional PostgreSQL/Redis development services, with bounded resources and no host credential or Docker-socket mounts.
+- Docker engine defaults merged into `/etc/docker/daemon.json`: `init` (docker-init reaps orphaned children) and `live-restore`.
+- Optional fleet guards: ONE shared local Supabase stack for every swarms-platform lane, a Docker event guard that removes any second stack on creation, automatic `.env.local` seeding into every worktree, a CLI shim, and Firstmate's spawn memory floor. See [fleet guards](docs/fleet-guards.md).
 
 Not copied: credentials, browser profiles, account sessions, agent history, live pane/task state, private project working trees, database volumes, or application-specific deployments. Unsafe agent auto-approval/trust allowlists are not transferred. See [security boundaries](docs/security.md) and [migration/recovery](docs/recovery.md).
 
@@ -77,6 +79,7 @@ Set these booleans in `.local/host.yml`, validate, then explicitly apply:
 - `factory.profiles.tailscale`: installs the daemon only. Authenticate a fresh node yourself; Tailscale SSH additionally needs tailnet SSH policy. No existing SSH/firewall policy is rewritten.
 - `factory.profiles.desktop`: installs XFCE/TigerVNC/noVNC, then requires an operator-created VNC password before enabling listeners. Run `tigervncpasswd ~/.vnc/passwd` as the operator after package installation, protect it with mode `0600`, and rerun apply. Use an SSH tunnel as well. The browser launcher uses only `~/.vnc-chrome-profile`; sign in afresh, never copy a seed profile.
 - `factory.profiles.firstmate`: clones the pinned public source and writes dispatch preferences. Keep the agents profile enabled with it.
+- `factory.profiles.fleet_guards`: one shared Supabase stack plus the guards that keep it the only one (requires the docker and firstmate profiles). A fresh host needs `factory.fleet.fixture_archive` pointing at a snapshot of the fixture database volume; the play refuses to start an empty stack. Details and the incident that produced this in [docs/fleet-guards.md](docs/fleet-guards.md).
 
 `factory.start_services: false` suppresses user/system service and linger actions for container builds. It does not make a container a full replacement for a native host.
 

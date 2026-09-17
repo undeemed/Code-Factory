@@ -1,0 +1,8 @@
+{
+  "name": "fleet-shared-supabase",
+  "private": true,
+  "description": "Pinned Supabase CLI for the ONE shared local stack (Code Factory fleet guards)",
+  "dependencies": {
+    "supabase": "2.117.0"
+  }
+}

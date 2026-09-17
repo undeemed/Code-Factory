@@ -1,0 +1,15 @@
+{{ ansible_managed | comment }}
+# One PathChanged per worktree pool: a new slot directory in the pool fires the
+# seeder before the lane's first `pnpm dev`. Pools: factory.fleet.worktree_pools.
+
+[Unit]
+Description=Fleet worktree env seed - trigger on swarms-platform pool changes (Code Factory managed)
+
+[Path]
+{% for pool in factory_cfg.fleet.worktree_pools %}
+PathChanged={{ factory_cfg.home }}/{{ pool }}
+{% endfor %}
+Unit=flotilla-worktree-env-seed.service
+
+[Install]
+WantedBy=default.target

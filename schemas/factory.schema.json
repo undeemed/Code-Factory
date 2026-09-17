@@ -50,6 +50,9 @@
             },
             "desktop": {
               "type": "boolean"
+            },
+            "fleet_guards": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -173,6 +176,48 @@
             "display",
             "novnc_port",
             "geometry"
+          ]
+        },
+        "docker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "init": {
+              "type": "boolean"
+            },
+            "live_restore": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "init",
+            "live_restore"
+          ]
+        },
+        "fleet": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "supabase_project_id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{1,40}$"
+            },
+            "fixture_archive": {
+              "type": "string"
+            },
+            "worktree_pools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^/][^\\0]*$"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "supabase_project_id",
+            "fixture_archive",
+            "worktree_pools"
           ]
         }
       },

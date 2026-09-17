@@ -1,0 +1,5 @@
+# docker-guard allowlist. One entry per line.
+#   project:<id>  Supabase CLI project permitted to run (com.supabase.cli.project label)
+#   <glob>        container-name glob whose bare Postgres-family image is tolerated
+project:swarms-shared
+perpetual-signoz-*

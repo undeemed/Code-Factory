@@ -54,3 +54,8 @@ statusLine:
   transparent: true
 composer:
   shape: borderless
+# Mnemopi memory: FTS-only recall. The local embedding model (bge-base via
+# onnxruntime) costs ~1 GB per omp session; ten fleet lanes = 10 GB of swap on
+# the source host (2026-09-17). Applies only when memory.backend is mnemopi.
+mnemopi:
+  noEmbeddings: true

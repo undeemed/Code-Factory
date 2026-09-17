@@ -2,8 +2,13 @@
 # Docker from Ubuntu: docker.io + docker-compose-v2.
 #
 # One package family only - the source host runs Ubuntu's docker.io, so Docker
-# CE repositories are deliberately not added. No /etc/docker/daemon.json is
-# written: this playbook does not rewrite an existing engine configuration.
+# CE repositories are deliberately not added. /etc/docker/daemon.json is
+# MERGED, never replaced: the keys in factory_docker_daemon_settings are set,
+# every other key an operator put there is kept, and the daemon is restarted
+# only when the merged document differs. With live-restore on, that restart
+# leaves running containers untouched; the very first apply that turns
+# live-restore on is the one restart that recycles them (restart policies
+# bring them back), and the debug task below says so before it happens.
 #
 # Membership of the docker group is equivalent to passwordless root on the
 # host, so it is never granted implicitly. factory_docker_group_users is an
@@ -49,3 +54,48 @@
       factory_docker_group_users to the accounts that need it, or use sudo for
       docker commands.
   when: factory_docker_group_users | length == 0
+
+- name: Read the existing Docker daemon configuration
+  ansible.builtin.slurp:
+    src: "{{ factory_docker_daemon_json }}"
+  become: true
+  register: factory_docker_daemon_raw
+  # Absent on a fresh host; that is the common case, not a failure.
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Decode the existing daemon configuration
+  ansible.builtin.set_fact:
+    factory_docker_daemon_current: >-
+      {{ (((factory_docker_daemon_raw.content | b64decode)
+           if (factory_docker_daemon_raw.content is defined) else '{}')
+          | default('{}', true)) | from_json }}
+
+- name: Merge the engine settings into the daemon configuration
+  ansible.builtin.set_fact:
+    factory_docker_daemon_desired: >-
+      {{ factory_docker_daemon_current
+         | combine({'init': factory_cfg.docker.init | bool,
+                    'live-restore': factory_cfg.docker.live_restore | bool}) }}
+
+- name: Warn that the first live-restore switch recycles running containers
+  ansible.builtin.debug:
+    msg: >-
+      {{ factory_docker_daemon_json }} gains live-restore=true. The restart
+      that applies it stops every running container once (their restart
+      policies start them again); later restarts leave containers running.
+  when:
+    - factory_docker_daemon_current != factory_docker_daemon_desired
+    - not (factory_docker_daemon_current['live-restore'] | default(false) | bool)
+    - factory_docker_daemon_desired['live-restore'] | bool
+
+- name: Write the merged Docker daemon configuration
+  ansible.builtin.copy:
+    dest: "{{ factory_docker_daemon_json }}"
+    content: "{{ factory_docker_daemon_desired | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: restart docker

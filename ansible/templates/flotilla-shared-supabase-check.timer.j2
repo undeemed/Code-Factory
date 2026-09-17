@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Fleet shared Supabase keeper every 5 min (Code Factory managed)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Unit=flotilla-shared-supabase-check.service
+
+[Install]
+WantedBy=timers.target

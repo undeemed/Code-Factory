@@ -44,6 +44,12 @@ def validate_config(document):
         raise ValueError("use a non-root operator account")
     if config["profiles"]["firstmate"] and not config["profiles"]["agents"]:
         raise ValueError("Firstmate requires the agents profile")
+    if config["profiles"].get("fleet_guards"):
+        if not (config["profiles"]["docker"] and config["profiles"]["firstmate"]):
+            raise ValueError("fleet guards require the docker and firstmate profiles")
+        fixture = config.get("fleet", {}).get("fixture_archive", "")
+        if fixture and ".." in Path(fixture).parts:
+            raise ValueError("fleet.fixture_archive must not traverse; give a plain path")
     prune = config["browser_prune"]
     if prune["enabled"] and not config["profiles"]["agents"]:
         raise ValueError("browser pruning requires the agents profile")

@@ -91,6 +91,13 @@
       when: factory_cfg.profiles.docker | bool
       tags: [docker]
 
+    - name: Fleet guards - one shared Supabase stack, Docker event guard, worktree env seeding
+      ansible.builtin.import_tasks: tasks/fleet_guards.yml
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.fleet_guards | bool
+      tags: [fleet]
+
     - name: Tailscale package installation only
       ansible.builtin.import_tasks: tasks/tailscale.yml
       when: factory_cfg.profiles.tailscale | bool
@@ -151,6 +158,40 @@
       environment: "{{ factory_user_systemd_env }}"
       when: factory_manage_services | bool
       listen: restart herdr
+
+    - name: Restart the Docker daemon after a configuration merge
+      ansible.builtin.systemd_service:
+        name: docker.service
+        state: restarted
+      become: true
+      when: factory_manage_services | bool
+      listen: restart docker
+
+    - name: Restart the fleet Docker guard
+      ansible.builtin.systemd_service:
+        scope: user
+        name: flotilla-docker-guard.service
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: restart fleet docker guard
+
+    - name: Restart the fleet timers and path watcher
+      ansible.builtin.systemd_service:
+        scope: user
+        name: "{{ item }}"
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      loop:
+        - flotilla-shared-supabase-check.timer
+        - flotilla-worktree-env-seed.timer
+        - flotilla-worktree-env-seed.path
+      when: factory_manage_services | bool
+      listen: restart fleet timers
 
     - name: Restart the Chrome autoprune timer
       ansible.builtin.systemd_service:

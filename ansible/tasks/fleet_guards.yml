@@ -1,0 +1,302 @@
+---
+# Fleet guards: ONE shared local Supabase stack for every swarms-platform lane,
+# enforced at every layer that a crewmate can reach (docs/fleet-guards.md).
+#
+#   * ~/oss-fleet/shared-supabase - the stack's project dir: pinned Supabase
+#     CLI (npm ci from fleet/shared-supabase/package-lock.json), config.toml,
+#     check.sh keeper (idempotent start + DDL guard + env template), guard.sql.
+#   * ~/oss-fleet/doctor/docker-guard.sh - `docker events` watcher that removes
+#     any Supabase CLI project other than the shared one on creation and alerts
+#     on bare Postgres containers. Allowlist is first-write (operator-owned).
+#   * ~/oss-fleet/doctor/worktree-env-seed.sh - installs the stack's env file
+#     as .env.local in every swarms worktree; path unit + timer + login.
+#   * ~/.local/bin/supabase - shim refusing lifecycle subcommands.
+#
+# The database is a read-only test fixture. Its data cannot be provisioned from
+# source (the application's migrations do not apply cleanly to an empty
+# database), so a fresh host restores it from factory.fleet.fixture_archive, a
+# tarball of the Docker volume. Without the archive and without an existing
+# volume the play stops here with instructions rather than starting an empty,
+# useless stack.
+#
+# Everything is idempotent and check-mode safe: file/copy/template preview;
+# npm ci, volume restore and the first `supabase start` are skipped in check
+# mode and reported instead.
+
+- name: Ensure the fleet directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ factory_fleet_dir }}"
+    - "{{ factory_fleet_doctor_dir }}"
+    - "{{ factory_shared_supabase_dir }}"
+    - "{{ factory_shared_supabase_dir }}/supabase"
+    - "{{ factory_local_bin }}"
+    - "{{ factory_user_units }}"
+    - "{{ factory_user_units }}/default.target.wants"
+    - "{{ factory_user_units }}/timers.target.wants"
+
+# --- scripts and static files (repository-owned, always converged) -----------
+
+- name: Install the fleet scripts
+  ansible.builtin.copy:
+    src: "{{ factory_fleet_sources }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "{{ item.mode }}"
+    remote_src: true
+  become: true
+  loop:
+    - { src: doctor/docker-guard.sh, dest: "{{ factory_fleet_doctor_dir }}/docker-guard.sh", mode: "0755" }
+    - { src: doctor/worktree-env-seed.sh, dest: "{{ factory_fleet_doctor_dir }}/worktree-env-seed.sh", mode: "0755" }
+    - { src: shared-supabase/check.sh, dest: "{{ factory_shared_supabase_dir }}/check.sh", mode: "0755" }
+    - { src: shared-supabase/guard.sql, dest: "{{ factory_shared_supabase_dir }}/guard.sql", mode: "0644" }
+    - { src: shared-supabase/README.md, dest: "{{ factory_shared_supabase_dir }}/README.md", mode: "0644" }
+    - { src: shared-supabase/package.json, dest: "{{ factory_shared_supabase_dir }}/package.json", mode: "0644" }
+    - { src: shared-supabase/package-lock.json, dest: "{{ factory_shared_supabase_dir }}/package-lock.json", mode: "0644" }
+    - { src: bin/supabase, dest: "{{ factory_local_bin }}/supabase", mode: "0755" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: restart fleet docker guard
+
+# The Supabase config carries the project id; container names derive from it.
+- name: Render the shared stack's Supabase configuration
+  ansible.builtin.copy:
+    content: >-
+      {{ lookup('ansible.builtin.file', factory_fleet_sources ~ '/shared-supabase/supabase/config.toml')
+         | regex_replace('(?m)^project_id = .*$', 'project_id = "' ~ factory_shared_supabase_project ~ '"') }}
+    dest: "{{ factory_shared_supabase_dir }}/supabase/config.toml"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+
+# The allowlist is operator-owned after the first write: it names the shared
+# project and whatever bare Postgres containers the operator chose to tolerate.
+- name: Check for an existing docker-guard allowlist
+  ansible.builtin.stat:
+    path: "{{ factory_fleet_doctor_dir }}/docker-guard-allow.txt"
+    get_checksum: false
+  become: true
+  register: factory_fleet_allow_stat
+  changed_when: false
+  check_mode: false
+
+- name: Seed the docker-guard allowlist once
+  ansible.builtin.copy:
+    content: |
+      # docker-guard allowlist. One entry per line.
+      #   project:<id>  Supabase CLI project permitted to run (com.supabase.cli.project label)
+      #   <glob>        container-name glob whose bare Postgres-family image is tolerated
+      project:{{ factory_shared_supabase_project }}
+    dest: "{{ factory_fleet_doctor_dir }}/docker-guard-allow.txt"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  when: not (factory_fleet_allow_stat.stat.exists | default(false))
+
+- name: Assert the allowlist admits the shared project
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (factory_fleet_allow_stat.stat.exists | default(false))
+        or (lookup('ansible.builtin.file', factory_fleet_doctor_dir ~ '/docker-guard-allow.txt', errors='ignore') | default('', true))
+           is search('(?m)^project:' ~ (factory_shared_supabase_project | regex_escape) ~ '$')
+    fail_msg: >-
+      {{ factory_fleet_doctor_dir }}/docker-guard-allow.txt does not list
+      project:{{ factory_shared_supabase_project }}; the guard would remove the
+      shared stack itself. Add the line and re-run.
+    quiet: true
+  when: not ansible_check_mode
+
+# --- pinned Supabase CLI ------------------------------------------------------
+
+- name: Read the installed Supabase CLI version
+  ansible.builtin.command:
+    argv: ["{{ factory_shared_supabase_cli }}", --version]
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  register: factory_fleet_cli_version
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Report the CLI install that check mode cannot perform
+  ansible.builtin.debug:
+    msg: >-
+      check mode: would run `npm ci` in {{ factory_shared_supabase_dir }} for
+      supabase {{ factory_shared_supabase_cli_version }}.
+  when:
+    - ansible_check_mode
+    - (factory_fleet_cli_version.stdout | default('') | trim) != factory_shared_supabase_cli_version
+
+- name: Install the pinned Supabase CLI from the lock
+  ansible.builtin.command:
+    argv: [npm, ci, --no-fund, --no-audit, --loglevel=error]
+    chdir: "{{ factory_shared_supabase_dir }}"
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - (factory_fleet_cli_version.stdout | default('') | trim) != factory_shared_supabase_cli_version
+
+- name: Confirm the Supabase CLI matches the lock
+  ansible.builtin.command:
+    argv: ["{{ factory_shared_supabase_cli }}", --version]
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  register: factory_fleet_cli_verified
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert the Supabase CLI version
+  ansible.builtin.assert:
+    that:
+      - (factory_fleet_cli_verified.stdout | trim) == factory_shared_supabase_cli_version
+    fail_msg: >-
+      {{ factory_shared_supabase_cli }} reports
+      "{{ factory_fleet_cli_verified.stdout | default('') | trim }}" but
+      fleet/shared-supabase/package.json pins {{ factory_shared_supabase_cli_version }}.
+    quiet: true
+  when: not ansible_check_mode
+
+# --- the fixture volume -------------------------------------------------------
+
+- name: Check whether the fixture volume exists
+  ansible.builtin.command:
+    argv: [docker, volume, inspect, "{{ factory_shared_supabase_db_volume }}"]
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_env }}"
+  register: factory_fleet_volume
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Stat the fixture archive
+  ansible.builtin.stat:
+    path: "{{ factory_cfg.fleet.fixture_archive }}"
+    get_checksum: false
+  become: true
+  register: factory_fleet_fixture
+  changed_when: false
+  check_mode: false
+  when: factory_cfg.fleet.fixture_archive | length > 0
+
+- name: Refuse to start an empty shared stack
+  ansible.builtin.assert:
+    that:
+      - factory_fleet_volume.rc == 0 or (factory_fleet_fixture.stat.exists | default(false))
+    fail_msg: >-
+      No Docker volume {{ factory_shared_supabase_db_volume }} and no fixture
+      archive at "{{ factory_cfg.fleet.fixture_archive }}". The shared database
+      is a fixture that cannot be rebuilt from migrations. Copy the snapshot
+      (see {{ factory_shared_supabase_dir }}/README.md, "Snapshot") to this
+      host, set factory.fleet.fixture_archive to its path, and re-run.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Report the fixture restore that check mode cannot perform
+  ansible.builtin.debug:
+    msg: >-
+      check mode: would create volume {{ factory_shared_supabase_db_volume }}
+      from {{ factory_cfg.fleet.fixture_archive }}.
+  when:
+    - ansible_check_mode
+    - factory_fleet_volume.rc != 0
+
+- name: Restore the fixture volume from the archive
+  when:
+    - not ansible_check_mode
+    - factory_fleet_volume.rc != 0
+  block:
+    - name: Create the fixture volume
+      ansible.builtin.command:
+        argv: [docker, volume, create, "{{ factory_shared_supabase_db_volume }}"]
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      changed_when: true
+
+    - name: Unpack the archive into the volume
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
+          - "{{ factory_shared_supabase_db_volume }}:/v"
+          - -v
+          - "{{ factory_cfg.fleet.fixture_archive | dirname }}:/b:ro"
+          - alpine
+          - sh
+          - -c
+          - "tar xzf /b/{{ factory_cfg.fleet.fixture_archive | basename }} -C /v"
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_env }}"
+      changed_when: true
+
+# --- systemd units -------------------------------------------------------------
+
+- name: Render the fleet units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ factory_user_units }}/{{ item }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop: "{{ factory_fleet_units }}"
+  notify:
+    - reload user systemd
+    - restart fleet docker guard
+    - restart fleet timers
+
+- name: Statically enable the fleet units
+  ansible.builtin.file:
+    src: "{{ factory_user_units }}/{{ item.unit }}"
+    dest: "{{ factory_user_units }}/{{ item.wants }}/{{ item.unit }}"
+    state: link
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    force: true
+    follow: false
+  become: true
+  loop: "{{ factory_fleet_enabled_units }}"
+  loop_control:
+    label: "{{ item.unit }}"
+
+- name: Enable and start the fleet units
+  ansible.builtin.systemd_service:
+    scope: user
+    name: "{{ item.unit }}"
+    enabled: true
+    state: started
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_systemd_env }}"
+  loop: "{{ factory_fleet_enabled_units }}"
+  loop_control:
+    label: "{{ item.unit }}"
+  when: factory_manage_services | bool
+
+- name: Report the deferred fleet start
+  ansible.builtin.debug:
+    msg: >-
+      start_services is false: fleet units are written and statically enabled
+      but not started here. On a real host flotilla-shared-supabase.service
+      brings the stack up at login and generates
+      {{ factory_shared_supabase_dir }}/swarms-platform.env.local.
+  when: not (factory_manage_services | bool)

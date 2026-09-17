@@ -44,6 +44,31 @@ def test_firstmate_cannot_silently_omit_its_agent_dependencies(configuration):
         factory.validate_config(configuration)
 
 
+def test_fleet_guards_require_docker_and_firstmate(configuration):
+    configuration["factory"]["profiles"]["fleet_guards"] = True
+    configuration["factory"]["profiles"]["docker"] = False
+    with pytest.raises(ValueError, match="fleet guards require"):
+        factory.validate_config(configuration)
+
+
+def test_fleet_guards_accept_the_default_document_when_enabled(configuration):
+    configuration["factory"]["profiles"]["fleet_guards"] = True
+    assert factory.validate_config(configuration) is configuration
+
+
+def test_fleet_fixture_archive_cannot_traverse(configuration):
+    configuration["factory"]["profiles"]["fleet_guards"] = True
+    configuration["factory"]["fleet"]["fixture_archive"] = "/home/coder/../root/db.tgz"
+    with pytest.raises(ValueError, match="traverse"):
+        factory.validate_config(configuration)
+
+
+def test_unknown_fleet_field_is_rejected(configuration):
+    configuration["factory"]["fleet"]["allow_migrations"] = True
+    with pytest.raises(ValueError):
+        factory.validate_config(configuration)
+
+
 def test_bad_polling_window_cannot_disable_idle_accrual(configuration):
     configuration["factory"]["browser_prune"]["max_gap_seconds"] = 120
     with pytest.raises(ValueError, match="observation intervals"):

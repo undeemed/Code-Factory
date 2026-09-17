@@ -1,0 +1,13 @@
+{{ ansible_managed | comment }}
+# Triggered by flotilla-shared-supabase-check.timer; not enabled on its own.
+
+[Unit]
+Description=Fleet shared Supabase keeper tick - restart missing containers, re-apply guard (Code Factory managed)
+ConditionPathExists={{ factory_shared_supabase_dir }}/check.sh
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_shared_supabase_dir }}/check.sh
+TimeoutStartSec=900
+Nice=5

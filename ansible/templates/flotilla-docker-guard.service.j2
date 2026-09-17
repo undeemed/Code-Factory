@@ -1,0 +1,19 @@
+{{ ansible_managed | comment }}
+# Watches `docker events`: any Supabase CLI project other than the shared one is
+# removed the instant it is created; bare Postgres containers are alerted.
+# Allowlist: {{ factory_fleet_doctor_dir }}/docker-guard-allow.txt
+
+[Unit]
+Description=Fleet Docker guard - one Supabase stack per host, enforced on docker events (Code Factory managed)
+ConditionPathExists={{ factory_fleet_doctor_dir }}/docker-guard.sh
+ConditionPathExists={{ factory_fleet_doctor_dir }}/docker-guard-allow.txt
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_doctor_dir }}/docker-guard.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

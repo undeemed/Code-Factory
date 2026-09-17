@@ -213,6 +213,10 @@ factory_firstmate_config_names:
   - crew-dispatch.json
   - backend
   - startup-memory-budget
+  # Fresh spawns are refused while host MemAvailable is under this many MB
+  # (bin/fm-spawn-memory-floor-lib.sh). Ten live lanes at 5-8 GB each filled
+  # 24 GB RAM + 52 GB swap on the source host on 2026-09-17.
+  - spawn-memory-floor-mb
 factory_firstmate_config_first_write: false
 
 # --- Docker -----------------------------------------------------------------
@@ -220,6 +224,45 @@ factory_firstmate_config_first_write: false
 # Docker group membership equals passwordless root on the host, so it is an
 # explicit opt-in list, never the factory account by default.
 factory_docker_group_users: []
+# Engine settings merged into /etc/docker/daemon.json (existing keys are kept,
+# nothing is removed). `init` puts docker-init as PID 1 in every container so
+# orphaned children are reaped - the source host accumulated 489 zombies under
+# Supabase studio/pg_meta images whose PID 1 is a bare node process.
+# `live-restore` keeps containers running across dockerd restarts.
+# The merge itself happens inside one Jinja expression in tasks/docker.yml so
+# the booleans stay booleans in the written JSON.
+factory_docker_daemon_json: /etc/docker/daemon.json
+
+# --- Fleet guards (profiles.fleet_guards) -----------------------------------
+# ONE shared local Supabase stack for every swarms-platform lane, a Docker
+# event guard that removes any second stack on creation, an env seeder for
+# every worktree, and a CLI shim. Sources live under fleet/ in this repository;
+# installed paths sit under the account's home so the units keep working after
+# the checkout is gone. docs/fleet-guards.md explains the incident and design.
+factory_fleet_sources: "{{ code_factory_repo }}/fleet"
+factory_fleet_dir: "{{ factory_cfg.home }}/oss-fleet"
+factory_fleet_doctor_dir: "{{ factory_fleet_dir }}/doctor"
+factory_shared_supabase_dir: "{{ factory_fleet_dir }}/shared-supabase"
+factory_shared_supabase_cli: "{{ factory_shared_supabase_dir }}/node_modules/.bin/supabase"
+factory_shared_supabase_project: "{{ factory_cfg.fleet.supabase_project_id }}"
+factory_shared_supabase_db_volume: "supabase_db_{{ factory_shared_supabase_project }}"
+factory_shared_supabase_storage_volume: "supabase_storage_{{ factory_shared_supabase_project }}"
+# Pinned by fleet/shared-supabase/package-lock.json; read here for the version check.
+factory_shared_supabase_cli_version: "{{ (lookup('ansible.builtin.file', factory_fleet_sources ~ '/shared-supabase/package.json') | from_json).dependencies.supabase }}"
+factory_fleet_units:
+  - flotilla-shared-supabase.service
+  - flotilla-shared-supabase-check.service
+  - flotilla-shared-supabase-check.timer
+  - flotilla-docker-guard.service
+  - flotilla-worktree-env-seed.service
+  - flotilla-worktree-env-seed.path
+  - flotilla-worktree-env-seed.timer
+factory_fleet_enabled_units:
+  - { unit: flotilla-shared-supabase.service, wants: default.target.wants }
+  - { unit: flotilla-docker-guard.service, wants: default.target.wants }
+  - { unit: flotilla-worktree-env-seed.path, wants: default.target.wants }
+  - { unit: flotilla-shared-supabase-check.timer, wants: timers.target.wants }
+  - { unit: flotilla-worktree-env-seed.timer, wants: timers.target.wants }
 
 # --- Tailscale (install only; login, ACLs, SSH and UFW stay manual) ---------
 factory_tailscale_track: stable

@@ -1,0 +1,22 @@
+{{ ansible_managed | comment }}
+# The ONE shared local Supabase stack (project {{ factory_shared_supabase_project }}).
+# check.sh is idempotent: `supabase start` on the existing volumes, then the
+# DDL guard, then the env template every worktree receives. Started at login;
+# flotilla-shared-supabase-check.timer re-runs it every 5 minutes.
+# Docs: {{ factory_shared_supabase_dir }}/README.md
+
+[Unit]
+Description=Fleet shared Supabase stack - start at login, apply DDL guard (Code Factory managed)
+ConditionPathExists={{ factory_shared_supabase_dir }}/check.sh
+ConditionPathExists={{ factory_shared_supabase_cli }}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_shared_supabase_dir }}/check.sh
+ExecStop={{ factory_shared_supabase_cli }} stop --workdir {{ factory_shared_supabase_dir }}
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -59,7 +59,24 @@
                  factory_user_units ~ '/code-factory-novnc.service',
                  factory_user_units ~ '/default.target.wants/code-factory-vnc.service',
                  factory_user_units ~ '/default.target.wants/code-factory-novnc.service']
-                if (factory_cfg.profiles.desktop | bool) else []) }}
+                if (factory_cfg.profiles.desktop | bool) else [])
+             + ([factory_shared_supabase_dir ~ '/check.sh',
+                 factory_shared_supabase_dir ~ '/guard.sql',
+                 factory_shared_supabase_dir ~ '/supabase/config.toml',
+                 factory_shared_supabase_cli,
+                 factory_fleet_doctor_dir ~ '/docker-guard.sh',
+                 factory_fleet_doctor_dir ~ '/docker-guard-allow.txt',
+                 factory_fleet_doctor_dir ~ '/worktree-env-seed.sh',
+                 factory_local_bin ~ '/supabase']
+                + (factory_fleet_units
+                   | map('regex_replace', '^', factory_user_units ~ '/')
+                   | list)
+                + (factory_fleet_enabled_units | map(attribute='wants')
+                   | zip(factory_fleet_enabled_units | map(attribute='unit'))
+                   | map('join', '/')
+                   | map('regex_replace', '^', factory_user_units ~ '/')
+                   | list)
+                if (factory_cfg.profiles.fleet_guards | bool) else []) }}
 
     - name: Stat every expected output
       ansible.builtin.stat:

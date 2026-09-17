@@ -1,0 +1,13 @@
+{{ ansible_managed | comment }}
+# Installs the shared stack's env file as .env.local in every swarms-platform
+# checkout. Triggered by the path unit (new worktree), the timer, and login.
+
+[Unit]
+Description=Fleet worktree env seed - shared-backend .env.local into every swarms-platform checkout (Code Factory managed)
+ConditionPathExists={{ factory_fleet_doctor_dir }}/worktree-env-seed.sh
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_doctor_dir }}/worktree-env-seed.sh
+TimeoutStartSec=300

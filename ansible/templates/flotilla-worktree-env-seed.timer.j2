@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Fleet worktree env seed every 2 min - new pools, deleted files (Code Factory managed)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=flotilla-worktree-env-seed.service
+
+[Install]
+WantedBy=timers.target

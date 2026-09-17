@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# supabase shim (fleet) - this box runs ONE shared Supabase stack.
+# ~/oss-fleet/shared-supabase/README.md. Lifecycle and schema subcommands are
+# refused here; `npx supabase` inside a worktree bypasses this shim, but the
+# Docker event guard removes any second stack on creation regardless.
+case "${1:-}" in
+  status|--version|-v|help|--help|-h|"")
+    exec "$HOME/oss-fleet/shared-supabase/node_modules/.bin/supabase" --workdir "$HOME/oss-fleet/shared-supabase" "$@"
+    ;;
+esac
+cat >&2 <<EOF
+supabase $*: refused on this box.
+
+  ONE shared Supabase stack serves every lane: http://127.0.0.1:54321 (Studio :54323).
+  It is already running and your worktree's .env.local points at it.
+  The database is a read-only test fixture - no start/stop/reset/migrations/schema edits.
+  Details: ~/oss-fleet/shared-supabase/README.md
+  If your task truly needs a schema change: append 'needs-decision [key=schema]: ...' and stop.
+EOF
+exit 78
