@@ -209,6 +209,21 @@ def short_name(name, combo, member_count):
     return f"{name} ({member_count} keys)" if member_count > 1 else name
 
 
+def clamp_map(accepted):
+    """Map each effort level this model rejects onto its nearest accepted one.
+
+    Prefers the closest lower level, since silently thinking harder than asked
+    is worse than thinking slightly less.
+    """
+    mapping = {}
+    for level in OMP_EFFORTS:
+        if level in accepted:
+            continue
+        lower = [a for a in OMP_EFFORTS[: OMP_EFFORTS.index(level)] if a in accepted]
+        mapping[level] = lower[-1] if lower else accepted[0]
+    return mapping
+
+
 def build_model_entry(name, combo, catalog, efforts):
     """Describe a combo by what *every* member can honor.
 
@@ -252,6 +267,13 @@ def build_model_entry(name, combo, catalog, efforts):
     entry = {key: value for key, value in entry.items() if value is not None}
     if efforts:
         entry["thinking"] = {"mode": "effort", "efforts": efforts, "defaultLevel": efforts[-1]}
+        clamp = clamp_map(efforts)
+        if clamp:
+            # A role suffix or a retry.fallbackChains hop carries its level onto
+            # the next model, so `:xhigh` lands on models that never accepted it
+            # (MiMo and GLM answer 400). Map every level this model rejects down
+            # to its nearest supported neighbour instead of failing the request.
+            entry["compat"] = {"reasoningEffortMap": clamp}
     else:
         # No level the family accepts: keep reasoning display, never send the field.
         entry["compat"] = {"supportsReasoningEffort": False}
