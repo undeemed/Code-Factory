@@ -107,15 +107,42 @@ curl -X PATCH -b cookies "$OMNIROUTE_DASHBOARD/api/providers/<id>" \
   -d '{"isActive":true,"testStatus":"active","errorCode":null,"lastError":null}'
 ```
 
-The second Claude Max account (`Undeemed@icloud.com`) was disabled this way: it
-recorded `403 Request not allowed` while the phantom `cc/claude-fable-5-1` model
-was still in the catalog. With that model gone, a probe pinned to that
-connection served `claude-opus-5` normally, and it now shares the `opus-5`,
-`fable-5`, and `sonnet-5` options with the first account — verified by `opus-5`
-answering from account 2 while account 1 sat in a rate-limit window.
+### Root cause: a stale pinned Claude Code version
 
-Global auto-disable (`GET /api/settings/auto-disable-accounts`) is
-`enabled: false, threshold: 3, scope: all`; with it off, a ban signal records
-`test_status` but does not flip `is_active`. Also do not "test" a connection
-through `POST /api/providers/{id}/test`: it activates the connection as a side
-effect.
+The native `claude` provider presents a captured claude-cli identity (user
+agent, `x-anthropic-billing-header`, `x-app` version — see
+`open-sse/executors/claudeIdentity.ts` and
+`src/shared/constants/claudeCodeClient.ts`). Anthropic answers a stale identity
+with `403 Request not allowed`, and OmniRoute reads a 403 as a permanent ban, so
+the account silently leaves rotation. On 2026-09-17 the image pinned
+**2.1.220** while the host CLI was **2.1.274**; both Claude Max accounts were
+banned within the hour, and requests through omp's own Anthropic credential kept
+working, which is what proves the account was fine and the router's request shape
+was not. Bumping the pin restored both accounts immediately — `opus-5` served
+three consecutive probes with neither connection re-banning.
+
+Keep the pin in step with the installed CLI:
+
+```bash
+maintenance/omniroute-claude-client-version.sh omniroute --check   # compare pin vs host CLI
+maintenance/omniroute-claude-client-version.sh omniroute           # bump to the host CLI, restart
+```
+
+Like the system-role patch, the edit lives in the container's writable layer:
+re-run it after `docker pull` and after Claude Code updates on the host.
+
+### Clearing a ban
+
+Nothing clears `banned` automatically:
+
+```bash
+curl -X PATCH -b cookies "$OMNIROUTE_DASHBOARD/api/providers/<id>" \
+  -H 'Content-Type: application/json' \
+  -d '{"isActive":true,"testStatus":"active","errorCode":null,"lastError":null}'
+```
+
+Global auto-disable (`GET /api/settings/auto-disable-accounts`) reports
+`enabled: false, threshold: 3, scope: all`; even with it off, `test_status:
+banned` alone keeps a connection out of the dispatch pool. Also do not "test" a
+disabled connection through `POST /api/providers/{id}/test`: it activates the
+connection as a side effect.
