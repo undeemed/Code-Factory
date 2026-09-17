@@ -257,12 +257,15 @@ factory_fleet_units:
   - flotilla-worktree-env-seed.service
   - flotilla-worktree-env-seed.path
   - flotilla-worktree-env-seed.timer
+  - flotilla-dev-server-reaper.service
+  - flotilla-dev-server-reaper.timer
 factory_fleet_enabled_units:
   - { unit: flotilla-shared-supabase.service, wants: default.target.wants }
   - { unit: flotilla-docker-guard.service, wants: default.target.wants }
   - { unit: flotilla-worktree-env-seed.path, wants: default.target.wants }
   - { unit: flotilla-shared-supabase-check.timer, wants: timers.target.wants }
   - { unit: flotilla-worktree-env-seed.timer, wants: timers.target.wants }
+  - { unit: flotilla-dev-server-reaper.timer, wants: timers.target.wants }
 
 # --- Tailscale (install only; login, ACLs, SSH and UFW stay manual) ---------
 factory_tailscale_track: stable

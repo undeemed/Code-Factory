@@ -9,7 +9,11 @@
 #     any Supabase CLI project other than the shared one on creation and alerts
 #     on bare Postgres containers. Allowlist is first-write (operator-owned).
 #   * ~/oss-fleet/doctor/worktree-env-seed.sh - installs the stack's env file
-#     as .env.local in every swarms worktree; path unit + timer + login.
+#     as .env.local in every swarms worktree, plus a git-excluded .npmrc heap
+#     cap for pnpm-run scripts; path unit + timer + login.
+#   * ~/oss-fleet/doctor/dev-server-reaper.sh - every 2 min, kills next dev /
+#     tsc trees in worktrees whose lane is done/paused/blocked, agent-less or
+#     idle >= 30 min. Dev servers are throwaway; idle ones filled swap.
 #   * ~/.local/bin/supabase - shim refusing lifecycle subcommands.
 #
 # The database is a read-only test fixture. Its data cannot be provisioned from
@@ -55,6 +59,7 @@
   loop:
     - { src: doctor/docker-guard.sh, dest: "{{ factory_fleet_doctor_dir }}/docker-guard.sh", mode: "0755" }
     - { src: doctor/worktree-env-seed.sh, dest: "{{ factory_fleet_doctor_dir }}/worktree-env-seed.sh", mode: "0755" }
+    - { src: doctor/dev-server-reaper.sh, dest: "{{ factory_fleet_doctor_dir }}/dev-server-reaper.sh", mode: "0755" }
     - { src: shared-supabase/check.sh, dest: "{{ factory_shared_supabase_dir }}/check.sh", mode: "0755" }
     - { src: shared-supabase/guard.sql, dest: "{{ factory_shared_supabase_dir }}/guard.sql", mode: "0644" }
     - { src: shared-supabase/README.md, dest: "{{ factory_shared_supabase_dir }}/README.md", mode: "0644" }

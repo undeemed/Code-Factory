@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Fleet dev-server reaper every 2 min (Code Factory managed)
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=2min
+Unit=flotilla-dev-server-reaper.service
+
+[Install]
+WantedBy=timers.target

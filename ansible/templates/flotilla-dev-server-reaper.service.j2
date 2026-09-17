@@ -1,0 +1,15 @@
+{{ ansible_managed | comment }}
+# Triggered by flotilla-dev-server-reaper.timer; not enabled on its own.
+# Kills `next dev`/`next-server`/`tsc --noEmit` in treehouse worktrees whose
+# lane is done/paused/blocked/failed, agent-less, or idle >= 30 minutes.
+
+[Unit]
+Description=Fleet dev-server reaper - drop dev servers that outlived their lane (Code Factory managed)
+ConditionPathExists={{ factory_fleet_doctor_dir }}/dev-server-reaper.sh
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_doctor_dir }}/dev-server-reaper.sh
+TimeoutStartSec=120
+Nice=5
