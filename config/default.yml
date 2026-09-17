@@ -34,7 +34,7 @@ factory:
       - .treehouse/swarms-platform-bcc5ea
   browsers:
     obscura_version: '0.2.2'
-    obscura_sha256: 9e5d9d081909ea983bc8c94999bb3d411fd6b74a9788504295b7e25f84310505
+    obscura_sha256: c1b4548e36549a0228c39c1cc842df425bc7253af2b0a56bd2a538d8ff7e3406
     idle_timeout_min: 30
   firstmate:
     url: https://github.com/undeemed/firstmate.git
