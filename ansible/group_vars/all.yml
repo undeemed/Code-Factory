@@ -205,6 +205,15 @@ factory_agent_config_files:
     mode: "0600"
     first_write: true
 
+# OmniRoute is the model catalog for omp: every selectable option is a router
+# combo (one per model family), so a host must not carry a hand-written model
+# list that drifts as accounts rotate. The sync script reads the endpoint and
+# key from the account's own super.env - no host identity or secret here - and
+# runs with the reviewed effort ladders instead of probing during provisioning.
+factory_omniroute_sync_script: "{{ code_factory_repo }}/scripts/sync_omniroute_models.py"
+factory_omniroute_efforts_cache: "{{ code_factory_repo }}/config/omniroute-efforts.yml"
+factory_omniroute_models_yml: "{{ factory_cfg.home }}/.omp/agent/models.yml"
+
 # Firstmate reads these from its own checkout and already gitignores them, so
 # the clone stays clean and no .gitignore is edited.
 factory_firstmate_config_names:

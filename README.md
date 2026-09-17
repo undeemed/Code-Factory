@@ -9,7 +9,7 @@ Rebuild the coding environment around Herdr, Firstmate, OMP, Pi, and their suppo
 - Herdr 0.9.0 with captured UI preferences and one canonical, versioned user-service executable.
 - Node 24.19.0, Bun 1.4.0, uv 0.12.5, Rust 1.97.1, GitHub CLI 2.97.0, no-mistakes 1.48.0, and treehouse 2.1.1.
 - Locked OMP 18.1.13, Pi 0.84.2, Codex, AXI tools, and pnpm.
-- Safe OMP/Pi presentation and model-role settings. Firstmate crews use Pi/Opus 5; secondmates use OMP/Fable 5.1, both with xhigh effort.
+- Safe OMP/Pi presentation and model-role settings. Every OMP model role resolves to an OmniRoute combo named after one exact model, generated from the running router by `scripts/sync_omniroute_models.py`; see [model selection](docs/omniroute-models.md).
 - Pinned Firstmate source, its gitignored dispatch settings, and Herdr backend selection. No autonomous fleet restore or outward GitHub actions run during setup.
 - Guarded native browser pruning: five-minute checks, two hours of observed inactivity, active-request and persistent-profile protection.
 - Optional Docker, Tailscale installation, and a loopback-only single-profile XFCE/VNC desktop.

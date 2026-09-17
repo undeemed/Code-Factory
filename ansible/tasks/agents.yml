@@ -55,3 +55,29 @@
          | selectattr('stat.exists')
          | map(attribute='item.dest') | list | join(', ') | default('none', true) }}
       already exist and were not rewritten (first-write-only inputs).
+
+# The model list is generated, never copied: OmniRoute combos are the only
+# selectable options and they change whenever an account or family is added.
+# Unreachable router (fresh host, tunnel down) is not a provisioning failure -
+# the account keeps whatever list it had and the next run fills it in.
+- name: Sync omp's OmniRoute model list from the router
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ factory_omniroute_sync_script }}"
+      - --no-probe
+      - --efforts-cache
+      - "{{ factory_omniroute_efforts_cache }}"
+      - --models-yml
+      - "{{ factory_omniroute_models_yml }}"
+  become: true
+  become_user: "{{ factory_cfg.user }}"
+  register: factory_omniroute_sync
+  changed_when: "'wrote' in (factory_omniroute_sync.stderr | default(''))"
+  failed_when: false
+
+- name: Report the OmniRoute model sync outcome
+  ansible.builtin.debug:
+    msg: >-
+      {{ (factory_omniroute_sync.stderr_lines | default([]) | last)
+         | default('omniroute sync produced no output', true) }}

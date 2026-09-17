@@ -1,0 +1,87 @@
+# Measured `reasoning_effort` words each OmniRoute combo's upstreams accept.
+# Regenerate with scripts/sync_omniroute_models.py --update-cache; never hand-edit:
+# the advertised capabilities.effort_tiers disagree with what the upstreams take.
+efforts:
+  balanced:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  cc/claude-fable-5:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  deepseek-v4-pro:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  fable-5:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  glm-5.3:
+  - low
+  - high
+  - max
+  gpt-5.3-codex:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  gpt-5.5:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  gpt-5.6-luna:
+  - low
+  - medium
+  - high
+  - xhigh
+  gpt-5.6-sol:
+  - low
+  - medium
+  - high
+  - xhigh
+  gpt-5.6-terra:
+  - low
+  - medium
+  - high
+  - xhigh
+  mimo-v2.5-pro:
+  - low
+  - medium
+  - high
+  opus-5:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  quality:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  qwen3.8-max:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  sonnet-5:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
