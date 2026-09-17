@@ -219,6 +219,27 @@
             "fixture_archive",
             "worktree_pools"
           ]
+        },
+        "browsers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "obscura_version": {
+              "type": "string"
+            },
+            "obscura_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "idle_timeout_min": {
+              "type": "integer",
+              "minimum": 5
+            }
+          },
+          "required": [
+            "obscura_version",
+            "obscura_sha256"
+          ]
         }
       },
       "required": [

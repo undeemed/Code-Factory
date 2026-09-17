@@ -258,6 +258,10 @@ factory_shared_supabase_db_volume: "supabase_db_{{ factory_shared_supabase_proje
 factory_shared_supabase_storage_volume: "supabase_storage_{{ factory_shared_supabase_project }}"
 # Pinned by fleet/shared-supabase/package-lock.json; read here for the version check.
 factory_shared_supabase_cli_version: "{{ (lookup('ansible.builtin.file', factory_fleet_sources ~ '/shared-supabase/package.json') | from_json).dependencies.supabase }}"
+factory_fleet_browsers_dir: "{{ factory_fleet_dir }}/browsers"
+factory_browser_obscura_url: "https://github.com/h4ckf0r0day/obscura/releases/download/v{{ factory_cfg.browsers.obscura_version }}/obscura-x86_64-linux.tar.gz"
+factory_browser_obscura_checksum: "sha256:{{ factory_cfg.browsers.obscura_sha256 }}"
+
 factory_fleet_units:
   - flotilla-shared-supabase.service
   - flotilla-shared-supabase-check.service
@@ -268,6 +272,11 @@ factory_fleet_units:
   - flotilla-worktree-env-seed.timer
   - flotilla-dev-server-reaper.service
   - flotilla-dev-server-reaper.timer
+  - fleet-browser-obscura.service
+  - fleet-browser-sync.service
+  - fleet-browser-sync.timer
+  - fleet-browser-gc.service
+  - fleet-browser-gc.timer
 factory_fleet_enabled_units:
   - { unit: flotilla-shared-supabase.service, wants: default.target.wants }
   - { unit: flotilla-docker-guard.service, wants: default.target.wants }
@@ -275,6 +284,9 @@ factory_fleet_enabled_units:
   - { unit: flotilla-shared-supabase-check.timer, wants: timers.target.wants }
   - { unit: flotilla-worktree-env-seed.timer, wants: timers.target.wants }
   - { unit: flotilla-dev-server-reaper.timer, wants: timers.target.wants }
+  - { unit: fleet-browser-obscura.service, wants: default.target.wants }
+  - { unit: fleet-browser-sync.timer, wants: timers.target.wants }
+  - { unit: fleet-browser-gc.timer, wants: timers.target.wants }
 
 # --- Tailscale (install only; login, ACLs, SSH and UFW stay manual) ---------
 factory_tailscale_track: stable

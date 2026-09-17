@@ -32,10 +32,7 @@ factory:
     fixture_archive: ""
     worktree_pools:
       - .treehouse/swarms-platform-bcc5ea
-  firstmate:
-    url: https://github.com/undeemed/firstmate.git
-    revision: 341e691d77e09a36c3f03fa58ab1e6bc5c9e3527
-  desktop:
-    display: 1
-    novnc_port: 6080
-    geometry: 1440x900
+  browsers:
+    obscura_version: '0.2.2'
+    obscura_sha256: 9e5d9d081909ea983bc8c94999bb3d411fd6b74a9788504295b7e25f84310505
+    idle_timeout_min: 30

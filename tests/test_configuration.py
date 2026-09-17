@@ -56,6 +56,17 @@ def test_fleet_guards_accept_the_default_document_when_enabled(configuration):
     assert factory.validate_config(configuration) is configuration
 
 
+def test_fleet_guards_require_browsers_block(configuration):
+    configuration["factory"]["profiles"]["fleet_guards"] = True
+    configuration["factory"].pop("browsers", None)
+    with pytest.raises(ValueError, match="obscura"):
+        factory.validate_config(configuration)
+
+
+def test_browsers_valid_block_accepted(configuration):
+    assert factory.validate_config(configuration) is configuration
+
+
 def test_fleet_fixture_archive_cannot_traverse(configuration):
     configuration["factory"]["profiles"]["fleet_guards"] = True
     configuration["factory"]["fleet"]["fixture_archive"] = "/home/coder/../root/db.tgz"

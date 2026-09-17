@@ -98,6 +98,13 @@
         - factory_cfg.profiles.fleet_guards | bool
       tags: [fleet]
 
+    - name: Fleet browser ladder - obscura tier, sync timer, gc timer, env injection
+      ansible.builtin.import_tasks: tasks/fleet-browsers.yml
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.fleet_guards | bool
+      tags: [fleet]
+
     - name: Tailscale package installation only
       ansible.builtin.import_tasks: tasks/tailscale.yml
       when: factory_cfg.profiles.tailscale | bool
@@ -177,6 +184,31 @@
       environment: "{{ factory_user_systemd_env }}"
       when: factory_manage_services | bool
       listen: restart fleet docker guard
+
+    - name: Restart fleet browser obscura
+      ansible.builtin.systemd_service:
+        scope: user
+        name: fleet-browser-obscura.service
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      when: factory_manage_services | bool
+      listen: restart fleet browser obscura
+
+    - name: Restart fleet browser timers
+      ansible.builtin.systemd_service:
+        scope: user
+        name: "{{ item }}"
+        state: restarted
+      become: "{{ factory_become_target | bool }}"
+      become_user: "{{ factory_cfg.user }}"
+      environment: "{{ factory_user_systemd_env }}"
+      loop:
+        - fleet-browser-sync.timer
+        - fleet-browser-gc.timer
+      when: factory_manage_services | bool
+      listen: restart fleet browser timers
 
     - name: Restart the fleet timers and path watcher
       ansible.builtin.systemd_service:

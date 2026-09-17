@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Fleet browser session sync every 2 min (Code Factory managed)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=fleet-browser-sync.service
+
+[Install]
+WantedBy=timers.target

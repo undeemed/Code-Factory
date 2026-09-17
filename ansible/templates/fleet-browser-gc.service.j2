@@ -1,0 +1,12 @@
+{{ ansible_managed | comment }}
+# Triggered by fleet-browser-gc.timer; not enabled on its own.
+
+[Unit]
+Description=Fleet browser gc - stop fallback tiers idle >= 30 min (Code Factory managed)
+ConditionPathExists={{ factory_fleet_browsers_dir }}/fleet-browser
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_browsers_dir }}/fleet-browser gc
+TimeoutStartSec=120

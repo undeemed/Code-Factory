@@ -1,0 +1,22 @@
+{{ ansible_managed | comment }}
+# Tier 1 of the fleet browser ladder (obscura -> chrome -> vnc). Always on.
+# Persistent cookies in ~/.fleet-browser/obscura; --allow-private-network so
+# lanes can reach their own dev servers on 127.0.0.1.
+
+[Unit]
+Description=Fleet browser tier 1 - Obscura CDP server on 127.0.0.1:9222 (Code Factory managed)
+ConditionPathExists={{ factory_fleet_browsers_dir }}/obscura
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=OBSCURA_ALLOW_PRIVATE_NETWORK=1
+ExecStartPre=/bin/mkdir -p %h/.fleet-browser/obscura
+ExecStart={{ factory_fleet_browsers_dir }}/obscura serve --host 127.0.0.1 --port 9222 --allow-private-network --storage-dir %h/.fleet-browser/obscura
+Restart=always
+RestartSec=3
+MemoryMax=3G
+Nice=2
+
+[Install]
+WantedBy=default.target

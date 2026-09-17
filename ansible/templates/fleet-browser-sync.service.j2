@@ -1,0 +1,12 @@
+{{ ansible_managed | comment }}
+# Triggered by fleet-browser-sync.timer; not enabled on its own.
+
+[Unit]
+Description=Fleet browser session sync - converge cookies across live tiers (Code Factory managed)
+ConditionPathExists={{ factory_fleet_browsers_dir }}/cookie-sync.ts
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_browsers_dir }}/fleet-browser sync
+TimeoutStartSec=120

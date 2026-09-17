@@ -1,0 +1,168 @@
+---
+# Fleet browsers: obscura -> chrome -> vnc tier ladder, shared session jar.
+# docs/fleet-guards.md owns the design; fleet/browsers/fleet-browser owns the
+# runtime. Only the obscura tier needs provisioning (pinned binary + unit);
+# chrome and vnc are started on demand by the operator or the fleet-browser
+# CLI and gc'd after idle_timeout_min.
+
+- name: Ensure fleet browser directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ factory_fleet_browsers_dir }}"
+    - "{{ factory_cfg.home }}/.fleet-browser"
+
+- name: Install the fleet browser scripts
+  ansible.builtin.copy:
+    src: "{{ factory_fleet_sources }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "{{ item.mode }}"
+    remote_src: true
+  become: true
+  loop:
+    - { src: browsers/fleet-browser, dest: "{{ factory_fleet_browsers_dir }}/fleet-browser", mode: "0755" }
+    - { src: browsers/cookie-sync.ts, dest: "{{ factory_fleet_browsers_dir }}/cookie-sync.ts", mode: "0644" }
+    - { src: browsers/env.sh, dest: "{{ factory_fleet_browsers_dir }}/env.sh", mode: "0644" }
+
+- name: Stat the obscura binary
+  ansible.builtin.stat:
+    path: "{{ factory_fleet_browsers_dir }}/obscura"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: factory_obscura_stat
+  changed_when: false
+  check_mode: false
+
+- name: Download and extract the pinned Obscura binary
+  when: >-
+    not factory_obscura_stat.stat.exists
+    or factory_obscura_stat.stat.checksum != factory_cfg.browsers.obscura_sha256
+  block:
+    - name: Fetch the obscura tarball
+      ansible.builtin.get_url:
+        url: "{{ factory_browser_obscura_url }}"
+        dest: "{{ factory_fleet_browsers_dir }}/obscura.tar.gz"
+        checksum: "{{ factory_browser_obscura_checksum }}"
+        mode: "0600"
+        owner: "{{ factory_cfg.user }}"
+      become: true
+
+    - name: Extract obscura binaries
+      ansible.builtin.unarchive:
+        src: "{{ factory_fleet_browsers_dir }}/obscura.tar.gz"
+        dest: "{{ factory_fleet_browsers_dir }}"
+        remote_src: true
+        owner: "{{ factory_cfg.user }}"
+        group: "{{ factory_group }}"
+        mode: "0755"
+      become: true
+
+    - name: Clean up the obscura tarball
+      ansible.builtin.file:
+        path: "{{ factory_fleet_browsers_dir }}/obscura.tar.gz"
+        state: absent
+      become: true
+
+- name: Assert the obscura binary matches the lock
+  ansible.builtin.assert:
+    that:
+      - factory_obscura_stat.stat.exists | default(false)
+    fail_msg: >-
+      {{ factory_fleet_browsers_dir }}/obscura absent after extract; check
+      {{ factory_browser_obscura_url }}.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Inject the shared-browser env into shell profiles
+  ansible.builtin.lineinfile:
+    path: "{{ factory_cfg.home }}/{{ item }}"
+    line: '. "{{ factory_fleet_browsers_dir }}/env.sh" 2>/dev/null'
+    insertbefore: BOF
+    create: true
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop:
+    - .profile
+    - .bashrc
+
+- name: Inject the shared-browser env into herdr.service
+  ansible.builtin.lineinfile:
+    path: "{{ factory_cfg.home }}/.config/systemd/user/herdr.service"
+    insertafter: "^\\[Service\\]"
+    line: "{{ item }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop:
+    - "Environment=CHROME_DEVTOOLS_AXI_BROWSER_URL=http://127.0.0.1:9222"
+    - "Environment=FLEET_BROWSER_TIER=obscura"
+    - "Environment=PATH={{ factory_fleet_browsers_dir }}:{{ factory_user_env.PATH }}"
+  notify: reload user systemd
+
+- name: Render fleet browser units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ factory_user_units }}/{{ item }}"
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    mode: "0644"
+  become: true
+  loop:
+    - fleet-browser-obscura.service
+    - fleet-browser-chrome.service
+    - fleet-browser-vnc.service
+    - fleet-browser-sync.service
+    - fleet-browser-sync.timer
+    - fleet-browser-gc.service
+    - fleet-browser-gc.timer
+  notify:
+    - reload user systemd
+    - restart fleet browser obscura
+    - restart fleet browser timers
+
+- name: Statically enable fleet browser units
+  ansible.builtin.file:
+    src: "{{ factory_user_units }}/{{ item.unit }}"
+    dest: "{{ factory_user_units }}/{{ item.wants }}/{{ item.unit }}"
+    state: link
+    owner: "{{ factory_cfg.user }}"
+    group: "{{ factory_group }}"
+    force: true
+    follow: false
+  become: true
+  loop:
+    - { unit: fleet-browser-obscura.service, wants: default.target.wants }
+    - { unit: fleet-browser-sync.timer, wants: timers.target.wants }
+    - { unit: fleet-browser-gc.timer, wants: timers.target.wants }
+
+- name: Enable and start fleet browser units
+  ansible.builtin.systemd_service:
+    scope: user
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  become: "{{ factory_become_target | bool }}"
+  become_user: "{{ factory_cfg.user }}"
+  environment: "{{ factory_user_systemd_env }}"
+  loop:
+    - fleet-browser-obscura.service
+    - fleet-browser-sync.timer
+    - fleet-browser-gc.timer
+  when: factory_manage_services | bool
+
+- name: Report the deferred fleet browser start
+  ansible.builtin.debug:
+    msg: >-
+      start_services is false: obscura + sync/gc units are written and
+      statically enabled but not started here.
+  when: not (factory_manage_services | bool)

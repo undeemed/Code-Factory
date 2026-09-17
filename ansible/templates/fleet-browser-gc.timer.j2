@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Fleet browser gc every 5 min (Code Factory managed)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=fleet-browser-gc.service
+
+[Install]
+WantedBy=timers.target

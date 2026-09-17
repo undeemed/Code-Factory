@@ -1,0 +1,16 @@
+{{ ansible_managed | comment }}
+# Tier 3: TigerVNC display :9 + headed Chromium + noVNC on 127.0.0.1:6909, on
+# demand (`fleet-browser up vnc`), stopped by fleet-browser gc after 30 idle min.
+
+[Unit]
+Description=Fleet browser tier 3 - VNC display with headed Chromium on 127.0.0.1:9523 (Code Factory managed)
+ConditionPathExists={{ factory_fleet_browsers_dir }}/fleet-browser
+ConditionPathExists=/usr/bin/tigervncserver
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart={{ factory_fleet_browsers_dir }}/fleet-browser _run-vnc
+Restart=on-failure
+RestartSec=5
+MemoryMax=4G
