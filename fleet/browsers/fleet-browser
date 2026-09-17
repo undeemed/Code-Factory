@@ -36,7 +36,7 @@ VNC_URL=http://127.0.0.1:9523
 OBSCURA_JAR=$STATE/obscura/cookies.json
 VNC_DISPLAY=9
 VNC_WEB_PORT=6909
-mkdir -p "$STATE"; chmod 700 "$STATE"
+mkdir -p "$STATE"; chmod 755 "$STATE"
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 
 port_of() { case "$1" in obscura) echo 9222 ;; chrome) echo 9522 ;; vnc) echo 9523 ;; *) return 1 ;; esac; }
