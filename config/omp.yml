@@ -1,16 +1,16 @@
 modelRoles:
-  designer: omniroute/cc/claude-fable-5-1:high
-  smol: omniroute/mimo-v2.5-pro:low
-  slow: omniroute/cc/claude-opus-5:xhigh
-  vision: omniroute/sonnet-5:high
-  plan: omniroute/cc/claude-fable-5-1:xhigh
-  commit: omniroute/mimo-v2.5-pro:low
-  tiny: omniroute/mimo-v2.5-pro:low
-  advisor: omniroute/sonnet-5:high
+  designer: omniroute/cc/claude-fable-5-1
+  smol: omniroute/sonnet-5
+  slow: omniroute/cc/claude-opus-5
+  vision: omniroute/sonnet-5
+  plan: omniroute/cc/claude-fable-5-1
+  commit: omniroute/sonnet-5
+  tiny: omniroute/sonnet-5
+  advisor: omniroute/sonnet-5
   Kimi: kimi-code/k3
-  task: omniroute/cc/claude-opus-5:xhigh
-  subagent: omniroute/cc/claude-opus-5:xhigh
-  default: omniroute/cc/claude-opus-5:xhigh
+  task: omniroute/cc/claude-opus-5
+  subagent: omniroute/cc/claude-opus-5
+  default: omniroute/cc/claude-opus-5
 theme:
   dark: dark-rose-pine
 symbolPreset: nerd
@@ -62,5 +62,8 @@ retry:
     - omniroute/cc/claude-opus-5
     - omniroute/auto/best-coding
     default:
+    - omniroute/auto/best-coding
+    omniroute/sonnet-5:
+    - omniroute/cc/claude-fable-5-1
     - omniroute/auto/best-coding
   maxDelayMs: 60000
