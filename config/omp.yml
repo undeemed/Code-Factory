@@ -56,3 +56,10 @@ composer:
   shape: borderless
 mnemopi:
   noEmbeddings: true
+retry:
+  fallbackChains:
+    omniroute/cc/claude-fable-5-1:
+    - omniroute/cc/claude-opus-5
+    - omniroute/auto/best-coding
+    default:
+    - omniroute/auto/best-coding
