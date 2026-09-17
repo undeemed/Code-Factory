@@ -94,6 +94,52 @@ the same id works when requested directly.
    are hidden from the catalog and therefore cannot be combo members. Cloudflare
    is excluded from the combo set for now.
 
+## What the router exposes for routing and parallelism
+
+Worth knowing precisely, because Claude traffic can reach almost none of it.
+
+**Combo routing strategies** (`open-sse/services/combo*`): `auto`, `round-robin`,
+`weighted`, `priority`, `random`, `strict-random`, `least-used`, `fill-first`,
+`headroom`, `reset-aware`, `reset-window`, `lkgp`, `p2c`, `quota-share`,
+`cache-optimized`, `context-optimized`, `context-relay`, `cost-optimized`.
+Several map exactly onto Anthropic's semantics — `cache-optimized` for prefix
+affinity, `headroom`/`reset-aware` for picking the seat whose window has
+recovered.
+
+**None of them apply to Claude today.** Claude is pinned to direct provider ids
+(`cc/claude-opus-5`, `cc/claude-fable-5-1`) because a combo wraps the stream in
+its own quality validation and the `cc` member dies with `502 quality
+validation — streaming upstream error` at real agent payload size. There is no
+env or settings toggle for that validation (`combo/validateQuality.ts` is
+unconditional), so the trade is fixed: direct ids stream reliably and forfeit
+router-side routing. Failover therefore lives in the **client** — omp's
+`retry.fallbackChains` — not in the router.
+
+The same split disables the per-seat gate that *looks* like the right answer:
+`quotaShareConcurrencyLimit` (enabled) reads `provider_connections.max_concurrent`,
+but only on the quota-share **combo** dispatch path, so it never fires for a
+direct id. Per-seat concurrency for Claude comes from the other mechanism
+entirely — `rateLimitProtection` plus `rateLimitOverrides.maxConcurrent` on the
+connection, which drives a per-connection Bottleneck limiter. Note these are two
+different fields with the same name: `max_concurrent` (column, combo paths) and
+`rateLimitOverrides.maxConcurrent` (JSON, limiter path). Setting only the column
+does nothing for direct ids. See
+[resilience](omniroute-resilience.md#timing-derived-from-anthropics-own-documented-semantics).
+
+**Parallelism bounds, outermost first:**
+
+| bound | scope | current |
+| --- | --- | --- |
+| `OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT` | router-wide, heavy requests only | 6 |
+| `requestQueue.concurrentRequests` | per connection, when the gate is on | 120 |
+| `rateLimitOverrides.maxConcurrent` | per connection | 3 on Claude seats |
+| `rateLimitOverrides.maxWaitMs` | per connection queue wait | 12 000 ms |
+| `requestQueue.maxQueueDepth` | per connection queue length; `0` = **unbounded** | 0 |
+
+`maxQueueDepth: 0` meaning "unbounded" rather than "no queue" is the one that
+reads backwards; set it `> 0` to make bursts fail fast with
+`RATE_LIMIT_QUEUE_FULL` instead of waiting out `maxWaitMs`.
+
 ## Connections that "turn themselves off"
 
 A connection is skipped before dispatch when `test_status` is `banned` or

@@ -162,7 +162,8 @@ heap peaking at **920 MiB of the 3 GB ceiling**.
 
 Dashboard/DB settings:
 
-- Claude seats: `rateLimitProtection: false`, `maxConcurrent: null`,
+- Claude seats: `rateLimitProtection: true` with a per-seat cap
+  (`maxConcurrent: 3`, `rateLimitOverrides: {maxConcurrent: 3, maxWaitMs: 12000}`),
   `disableCooling: false`
 - `modelLockout.errorCodes`: `[403, 404, 429, 503]`
 - compression: `caveman` and `rtk` engines disabled, `defaultMode: off`,
@@ -184,11 +185,46 @@ Above that Anthropic answers `403 Request not allowed` with a reset window, and 
 burst of very large requests parks the seat for ~30 minutes. Note this means a
 403 is not automatically proof of a ban — check whether a burst preceded it.
 
-If those 403s show up in normal fleet operation, the correct response is a
-*moderate* per-seat cap, not the shipped one: re-enable `rateLimitProtection`
-with `maxConcurrent: 4` **and** `requestQueue.minTimeBetweenRequestsMs: 0`. The
-350 ms floor is what made the original limiter starve — it caps a provider at
-~171 requests/minute regardless of `concurrentRequests: 120`.
+Those 403s did show up in normal fleet operation — both seats sat at
+`test_status: banned` for 5.5 h on 2026-09-17 with
+`lastError: Request not allowed`, and the client pin was *in step* (2.1.274 both
+sides), so a burst was the only remaining cause.
+
+To be precise about what that state is: **`banned` is OmniRoute's own local flag,
+not an Anthropic account state.** The accounts were never restricted upstream —
+the same seats answered on the first probe the moment the flag was cleared. One
+code path sets it (`open-sse/handlers/chatCore.ts`, any error classified
+`FORBIDDEN` → `testStatus: "banned"`, `isActive: false`, logged as "disabling
+permanently"), and **nothing in the tree ever clears it**. So the cost of a
+transient 403 is not a ban; it is a seat that stays out of rotation until a human
+notices. That asymmetry is the real defect, and it has two halves:
+
+1. Stop earning the 403 — the moderate per-seat cap, asserted by the posture
+   script: `rateLimitProtection: true` plus `rateLimitOverrides` of
+   `{maxConcurrent: 3, maxWaitMs: 12000}` on each Claude seat.
+2. Stop paying for it after the fact — revive seats whose flag has outlived its
+   cause, which `omniroute-resilience-posture.sh` now does for OAuth seats whose
+   `rate_limited_until` has passed.
+
+`requestQueue.minTimeBetweenRequestsMs: 0` is *not* needed alongside it, and the
+earlier note to pair them was wrong for this shape. The 350 ms floor only binds
+when a provider wants more than ~171 requests/minute; at `maxConcurrent: 3` with
+4 s agent turns the seat offers ~45/minute, so concurrency binds an order of
+magnitude earlier and the floor never fires. Leave the global floor alone —
+per-connection `minTime` cannot express 0 anyway (`overrides.minTime > 0` is the
+guard, so 0 means "no override").
+
+Verified after applying it: **8 concurrent 400-token requests against one seat
+held at exactly 3 `executing`, all 8 returned 200, and neither seat came back
+`rate_limited` or `banned`.** The same shape previously produced 5 × 403 and a
+~30-minute park.
+
+One upstream trap: per-connection overrides are read only by
+`initializeRateLimits()`, which is guarded by a one-shot `initialized` flag, and
+`refreshConnectionRateLimits()` — whose doc comment says it is "called after a
+PATCH update to `rateLimitOverrides`" — **has no caller anywhere in the tree**.
+So a cap written through the API is inert until the container restarts. The
+posture script prints the restart line when it changes one.
 
 ## 5. Shortening the wait after a seat is limited
 
@@ -208,11 +244,16 @@ The shipped defaults get both wrong:
 The reviewed posture, asserted by `maintenance/omniroute-resilience-posture.sh`:
 
 ```
-connectionCooldown.oauth   baseCooldownMs 5000  useUpstreamRetryHints true  maxBackoffSteps 8
+connectionCooldown.oauth   baseCooldownMs 5000  useUpstreamRetryHints true  maxBackoffSteps 4
 connectionCooldown.apikey  baseCooldownMs 3000  useUpstreamRetryHints true  maxBackoffSteps 5
 waitForCooldown            enabled  maxRetries 2   maxRetryWaitSec 8
 comboCooldownWait          enabled  maxWaitMs 12000  maxAttempts 3  budgetMs 40000
-rateLimitProtection        off on every connection whose authType is oauth
+rateLimitProtection        off on every OAuth seat except capped providers
+                           (`claude`), which keep it on behind the per-seat cap
+per-seat cap                maxConcurrent 3  maxWaitMs 12000  on each capped seat
+stale local flags           cleared on OAuth seats that are `banned`/`unavailable`
+                            with no cooldown left and quiet for 300 s
+                            (`OMNIROUTE_SEAT_REVIVE_GRACE_SEC`)
 ```
 
 Honouring the hint is what makes the wait short, which is the opposite of how it
@@ -233,6 +274,37 @@ so it sleeps up to five minutes before giving up on a stated wait. `config/omp.y
 caps it at 60 000 and pairs it with a fallback chain
 (`cc/claude-fable-5-1` → `cc/claude-opus-5` → `auto/best-coding`), so a seat-level
 wall becomes a hop, not a nap.
+
+## Timing, derived from Anthropic's own documented semantics
+
+Every number above is chosen against what
+[platform.claude.com/docs/en/api/rate-limits](https://platform.claude.com/docs/en/api/rate-limits)
+actually specifies, not against a guess about "requests per minute".
+
+| Anthropic's documented behaviour | what it implies for the router | knob |
+| --- | --- | --- |
+| Limits use a **token bucket**: "capacity is continuously replenished … rather than being reset at fixed intervals" | a pure rate 429 clears in seconds; a fixed 60 s cooldown wastes the window | `baseCooldownMs` 5000 / 3000 |
+| `retry-after` is returned on 429, and "**earlier retries will fail**" | never retry inside a stated window; park the seat for exactly it | `useUpstreamRetryHints: true` |
+| "You might hit rate limits over shorter time intervals … 60 RPM might be enforced as 1 request per second" | per-minute headroom does not license a burst; arrival shape matters | per-seat `maxConcurrent` |
+| 429s also come from **acceleration limits** on "a sharp increase in usage"; the fix is "ramp up your traffic gradually and maintain consistent usage patterns" | a fleet going 0 → 8 concurrent heavy turns is the documented trigger; cap concurrency rather than absorb the 429 | `maxConcurrent: 3` |
+| Only **uncached** input counts toward ITPM; `cache_read_input_tokens` do not | failing a turn over to a *cold* seat re-charges the entire prompt as `cache_creation` — the expensive path in both ITPM and dollars | prefer queueing over hopping while a seat is merely busy |
+| Cache TTL is 5 minutes, measured **from the start of the request**, and long generations spend it | a local ladder that can wait 640 s (`maxBackoffSteps: 8` → 5 s × 2⁷) lands in a dead zone: too long to keep the cache, too short to match a real 30–60 min seat park | `maxBackoffSteps: 4` (≤ 40 s) |
+
+The resulting split is the point: **queue when a seat is busy, hop when a seat is
+parked.** `maxConcurrent: 3` with a 12 s queue keeps a burst on the warm seat
+that already holds the cached prefix, while `useUpstreamRetryHints` parks a
+genuinely exhausted seat for its stated window so the fallback chain skips it on
+the first attempt instead of paying a cold prefix for nothing.
+
+Two caveats on the spend side, both for API-key connections only — a subscription
+seat cannot hit them:
+
+- The spend-cap 429 carries **no** `retry-after` and `error.details.error_code`
+  `enforced_spend_limit_reached`; access returns at 00:00 UTC on the 1st. No
+  cooldown ladder can shorten it, and OmniRoute does not distinguish it, so an
+  API-key connection that hits a monthly cap will churn its ladder pointlessly.
+- ITPM is estimated at request start and reconciled afterwards, so nothing local
+  can pre-compute it.
 
 ## Writable-layer patches
 

@@ -25,10 +25,23 @@
 #     With two Claude seats plus the routing pool behind a fallback chain,
 #     waiting is never the best move: fail over instead. Trimmed to seconds.
 #
-#   rateLimitProtection = off for every OAuth connection
+#   rateLimitProtection = off for every OAuth seat EXCEPT the capped ones
 #     It is a local admission gate meant for metered API keys. On an OAuth seat
-#     it queues the request locally instead of failing over, which surfaces as
-#     `504 local rate-limit execution expiration` while a healthy seat idles.
+#     with no cap it queues the request locally instead of failing over, which
+#     surfaces as `504 local rate-limit execution expiration` while a healthy
+#     seat idles. Claude is the exception: Anthropic's real ceiling on a Max
+#     seat is CONCURRENCY (measured ~3-4 heavy agent turns), and exceeding it
+#     earns `403 Request not allowed`, which this router reads as a permanent
+#     ban. So Claude seats keep the gate ON with a per-seat cap of
+#     CLAUDE_SEAT_CONCURRENCY, which converts a ban into a short local queue.
+#     Verified 2026-09-17: 8 concurrent 400-token requests held at exactly 3
+#     executing, all 200, neither seat rate-limited or banned.
+#
+#     Caveat: per-connection overrides load ONCE per process
+#     (`initializeRateLimits` is guarded by an `initialized` flag) and
+#     `refreshConnectionRateLimits()` has no caller upstream, so a changed cap
+#     needs a container restart to take effect. This script reports when that
+#     applies.
 #
 # Usage:
 #   omniroute-resilience-posture.sh            # assert (idempotent)
@@ -39,6 +52,14 @@ PORT=${OMNIROUTE_PORT:-20128}
 ENV_FILE=${OMNIROUTE_ENV_FILE:-$HOME/super.env}
 BASE=${OMNIROUTE_BASE:-http://127.0.0.1:$PORT}
 mode=${1:-assert}
+
+# Providers whose OAuth seats keep the local gate ON behind a per-seat cap,
+# because their real ceiling is concurrency and overrunning it earns a ban.
+CAPPED_PROVIDERS=${OMNIROUTE_CAPPED_PROVIDERS:-claude}
+SEAT_CONCURRENCY=${OMNIROUTE_SEAT_CONCURRENCY:-3}
+SEAT_QUEUE_MS=${OMNIROUTE_SEAT_QUEUE_MS:-12000}
+# Quiet period a seat must observe before its stale local flag is cleared.
+SEAT_REVIVE_GRACE_SEC=${OMNIROUTE_SEAT_REVIVE_GRACE_SEC:-300}
 
 log() { printf '== %s\n' "$*"; }
 
@@ -63,7 +84,7 @@ api() { curl -fsS -m 20 -b "$cookie" "$@"; }
 read -r -d '' desired <<'JSON' || true
 {
   "connectionCooldown": {
-    "oauth":  { "baseCooldownMs": 5000, "useUpstreamRetryHints": true, "maxBackoffSteps": 8 },
+    "oauth":  { "baseCooldownMs": 5000, "useUpstreamRetryHints": true, "maxBackoffSteps": 4 },
     "apikey": { "baseCooldownMs": 3000, "useUpstreamRetryHints": true, "maxBackoffSteps": 5 }
   },
   "waitForCooldown":   { "enabled": true, "maxRetries": 2, "maxRetryWaitSec": 8 },
@@ -95,8 +116,47 @@ sys.exit(0)
 '
 }
 
-oauth_connections_with_protection() {
-	# Connection ids whose auth is OAuth and whose local gate is still on.
+is_capped() {
+	case " $CAPPED_PROVIDERS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+stale_flag_seats() {
+	# "cid provider name" for OAuth seats parked on a local flag that has
+	# outlived its cause: `banned`/`unavailable`, no cooldown left, and quiet
+	# for SEAT_REVIVE_GRACE_SEC.
+	#
+	# `banned` is OmniRoute's OWN flag, not an Anthropic account state: one code
+	# path sets it (any FORBIDDEN classification in chatCore) and nothing in the
+	# tree ever clears it. A burst-induced 403 therefore costs a healthy seat
+	# until a human notices. This is that human.
+	api "$BASE/api/resilience/connections" | GRACE="$SEAT_REVIVE_GRACE_SEC" python3 -c '
+import json, os, sys
+from datetime import datetime, timezone
+
+grace = float(os.environ["GRACE"])
+now = datetime.now(timezone.utc)
+for c in json.load(sys.stdin)["connections"]:
+    if c.get("authType") != "oauth":
+        continue
+    if c.get("testStatus") not in ("banned", "unavailable"):
+        continue
+    # Respect a live cooldown: the upstream window is not ours to shorten.
+    if c.get("isCoolingDown") or (c.get("cooldownRemainingMs") or 0) > 0:
+        continue
+    stamp = c.get("lastErrorAt")
+    if stamp:
+        try:
+            when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            when = None
+        if when is not None and (now - when).total_seconds() < grace:
+            continue
+    print(c["id"], c.get("provider") or "?", c.get("name") or c["id"])
+'
+}
+
+oauth_seats() {
+	# "cid provider gate name" for every OAuth connection.
 	# authType comes from the resilience view; the gate state from rate-limits.
 	local conns limits
 	conns=$(api "$BASE/api/resilience/connections")
@@ -110,19 +170,59 @@ oauth = {
 }
 for row in json.loads(os.environ["LIMITS"])["connections"]:
     cid = row["connectionId"]
-    if cid in oauth and row.get("rateLimitProtection"):
-        print(cid, row.get("provider"), oauth[cid])
+    if cid in oauth:
+        print(cid, row.get("provider") or "?", 1 if row.get("rateLimitProtection") else 0, oauth[cid])
 '
+}
+
+seat_cap() {
+	# Persisted per-seat override for one connection: "maxConcurrent maxWaitMs".
+	api "$BASE/api/providers" | CID="$1" python3 -c '
+import json, os, sys
+raw = json.load(sys.stdin)
+rows = raw if isinstance(raw, list) else (raw.get("providers") or raw.get("connections") or raw.get("data") or [])
+for row in rows:
+    if row.get("id") == os.environ["CID"]:
+        ov = row.get("rateLimitOverrides") or {}
+        print(ov.get("maxConcurrent", "-"), ov.get("maxWaitMs", "-"))
+        break
+else:
+    print("- -")
+'
+}
+
+report_seats() {
+	local found=0 cid provider gate name cap qwait
+	while read -r cid provider gate name; do
+		[ -n "$cid" ] || continue
+		found=1
+		if is_capped "$provider"; then
+			read -r cap qwait <<<"$(seat_cap "$cid")"
+			if [ "$gate" = 1 ] && [ "$cap" = "$SEAT_CONCURRENCY" ] && [ "$qwait" = "$SEAT_QUEUE_MS" ]; then
+				printf '   %s (%s) capped at %s concurrent, %sms queue\n' "$name" "$provider" "$cap" "$qwait"
+			else
+				printf '   %s (%s) off posture: gate=%s cap=%s queue=%s -> want gate=1 cap=%s queue=%s\n' \
+					"$name" "$provider" "$gate" "$cap" "$qwait" "$SEAT_CONCURRENCY" "$SEAT_QUEUE_MS"
+			fi
+		elif [ "$gate" = 1 ]; then
+			printf '   %s (%s) off posture: local gate on with no cap -> want gate off\n' "$name" "$provider"
+		else
+			printf '   %s (%s) gate off\n' "$name" "$provider"
+		fi
+	done < <(oauth_seats)
+	[ "$found" = 1 ] || echo "   no OAuth seats"
 }
 
 if [ "$mode" = "--check" ]; then
 	log "resilience posture"
 	report_drift
-	log "OAuth seats with the local rate-limit gate still on"
-	if [ -z "$(oauth_connections_with_protection)" ]; then
+	log "OAuth seats"
+	report_seats
+	log "OAuth seats parked on a stale local flag"
+	if [ -z "$(stale_flag_seats)" ]; then
 		echo "   none"
 	else
-		oauth_connections_with_protection | sed 's/^/   /'
+		stale_flag_seats | sed 's/^/   /'
 	fi
 	exit 0
 fi
@@ -131,13 +231,49 @@ log "asserting resilience settings"
 api -X PATCH -H 'Content-Type: application/json' -d "$desired" "$BASE/api/resilience" >/dev/null
 report_drift
 
-log "clearing the local rate-limit gate on OAuth seats"
-cleared=0
+log "reviving OAuth seats parked on a stale local flag"
+revived=0
 while read -r cid provider name; do
 	[ -n "$cid" ] || continue
-	api -X POST -H 'Content-Type: application/json' \
-		-d "{\"connectionId\":\"$cid\",\"enabled\":false}" "$BASE/api/rate-limits" >/dev/null
-	printf '   cleared %s (%s)\n' "$name" "$provider"
-	cleared=$((cleared + 1))
-done < <(oauth_connections_with_protection)
-[ "$cleared" -gt 0 ] || echo "   already clear"
+	api -X PATCH -H 'Content-Type: application/json' \
+		-d '{"isActive":true,"testStatus":"active","errorCode":null,"lastError":null}' \
+		"$BASE/api/providers/$cid" >/dev/null
+	printf '   revived %s (%s)\n' "$name" "$provider"
+	revived=$((revived + 1))
+done < <(stale_flag_seats)
+[ "$revived" -gt 0 ] || echo "   none parked"
+
+log "asserting per-seat posture on OAuth seats"
+restart_needed=0
+changed=0
+while read -r cid provider gate name; do
+	[ -n "$cid" ] || continue
+	if is_capped "$provider"; then
+		read -r cap qwait <<<"$(seat_cap "$cid")"
+		if [ "$cap" != "$SEAT_CONCURRENCY" ] || [ "$qwait" != "$SEAT_QUEUE_MS" ]; then
+			api -X PATCH -H 'Content-Type: application/json' \
+				-d "{\"maxConcurrent\":$SEAT_CONCURRENCY,\"rateLimitOverrides\":{\"maxConcurrent\":$SEAT_CONCURRENCY,\"maxWaitMs\":$SEAT_QUEUE_MS}}" \
+				"$BASE/api/providers/$cid" >/dev/null
+			printf '   capped %s (%s) at %s concurrent, %sms queue\n' "$name" "$provider" "$SEAT_CONCURRENCY" "$SEAT_QUEUE_MS"
+			restart_needed=1
+			changed=1
+		fi
+		if [ "$gate" != 1 ]; then
+			api -X POST -H 'Content-Type: application/json' \
+				-d "{\"connectionId\":\"$cid\",\"enabled\":true}" "$BASE/api/rate-limits" >/dev/null
+			printf '   gate on for %s (%s)\n' "$name" "$provider"
+			changed=1
+		fi
+	elif [ "$gate" = 1 ]; then
+		api -X POST -H 'Content-Type: application/json' \
+			-d "{\"connectionId\":\"$cid\",\"enabled\":false}" "$BASE/api/rate-limits" >/dev/null
+		printf '   cleared %s (%s)\n' "$name" "$provider"
+		changed=1
+	fi
+done < <(oauth_seats)
+[ "$changed" -gt 0 ] || echo "   already on posture"
+
+if [ "$restart_needed" = 1 ]; then
+	log "a per-seat cap changed - restart to load it"
+	echo "   sudo docker restart omniroute   # overrides load once per process"
+fi
