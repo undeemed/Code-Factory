@@ -87,6 +87,7 @@ if [ "$mode" = "--check" ]; then
 	log "writable-layer patches"
 	bash "$MAINT/omniroute-system-role-patch.sh" "$NAME" --check
 	bash "$MAINT/omniroute-claude-client-version.sh" "$NAME" --check
+	bash "$MAINT/omniroute-resilience-posture.sh" --check
 	exit 0
 fi
 
@@ -95,6 +96,7 @@ if container_exists && [ "$mode" != "--recreate" ]; then
 	wait_healthy
 	bash "$MAINT/omniroute-system-role-patch.sh" "$NAME" >/dev/null || true
 	bash "$MAINT/omniroute-claude-client-version.sh" "$NAME" >/dev/null || true
+	bash "$MAINT/omniroute-resilience-posture.sh"
 else
 	args=(run -d --name "$NAME" --restart unless-stopped -p "$PORT:$PORT" -v "$VOLUME:/app/data")
 
@@ -153,6 +155,9 @@ else
 	log "applying writable-layer patches (discarded by docker rm / image pull)"
 	bash "$MAINT/omniroute-system-role-patch.sh" "$NAME"
 	bash "$MAINT/omniroute-claude-client-version.sh" "$NAME"
+
+	log "asserting the rate-limit posture (database-backed; re-seeded on startup)"
+	bash "$MAINT/omniroute-resilience-posture.sh"
 fi
 
 log "regenerating omp's model list from the running router"
@@ -169,3 +174,4 @@ $docker inspect "$NAME" --format '{{range .Config.Env}}{{println .}}{{end}}' |
 	grep -E 'OMNIROUTE_CHAT_|OMNIROUTE_MEMORY_MB' | sort
 bash "$MAINT/omniroute-system-role-patch.sh" "$NAME" --check
 bash "$MAINT/omniroute-claude-client-version.sh" "$NAME" --check
+bash "$MAINT/omniroute-resilience-posture.sh" --check

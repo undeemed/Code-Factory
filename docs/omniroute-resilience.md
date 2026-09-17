@@ -190,6 +190,50 @@ with `maxConcurrent: 4` **and** `requestQueue.minTimeBetweenRequestsMs: 0`. The
 350 ms floor is what made the original limiter starve — it caps a provider at
 ~171 requests/minute regardless of `concurrentRequests: 120`.
 
+## 5. Shortening the wait after a seat is limited
+
+Once a seat *is* limited, the reset window belongs to Anthropic and no setting
+shortens it. What settings control is how much of that window **you** spend
+waiting, and whether the router turns a timer into a block.
+
+The shipped defaults get both wrong:
+
+| setting | shipped | why it hurts |
+| --- | --- | --- |
+| `connectionCooldown.oauth.useUpstreamRetryHints` | `false` | discards `retry-after` and substitutes a local ladder (5s, 10s, 20s …). Measured live: a seat stating a **54-minute** reset had `rateLimitedUntil` **2 seconds** out. Retrying inside a stated window is what turns a 429 into `403 Request not allowed`. |
+| `waitForCooldown.maxRetryWaitSec` | `30` | blocks the request waiting for a cooling seat while a healthy seat idles. |
+| `comboCooldownWait` | `90 000 ms` × 5 attempts, `300 000 ms` budget | up to five minutes of dead time per request, for the same reason. |
+| `rateLimitProtection` on an OAuth seat | re-seeded `true` | queues locally instead of failing over → `504 … execution expiration`. |
+
+The reviewed posture, asserted by `maintenance/omniroute-resilience-posture.sh`:
+
+```
+connectionCooldown.oauth   baseCooldownMs 5000  useUpstreamRetryHints true  maxBackoffSteps 8
+connectionCooldown.apikey  baseCooldownMs 3000  useUpstreamRetryHints true  maxBackoffSteps 5
+waitForCooldown            enabled  maxRetries 2   maxRetryWaitSec 8
+comboCooldownWait          enabled  maxWaitMs 12000  maxAttempts 3  budgetMs 40000
+rateLimitProtection        off on every connection whose authType is oauth
+```
+
+Honouring the hint is what makes the wait short, which is the opposite of how it
+reads: the exhausted seat is parked for its real window and therefore *skipped*,
+so the request fails over to the other seat on the first attempt instead of
+queueing behind a seat that cannot answer. Two Claude Max seats are wired
+(`Undeemed@icloud.com`, `jerry.x0930@gmail.com`) as separate accounts with
+separate windows, so one parked seat is not an outage.
+
+These values live in OmniRoute's **database**, not its container env, and the
+server re-seeds part of that table on startup — `rateLimitProtection` has come
+back on for the OAuth seats after every recreate so far. Hence an assertion
+script wired into `omniroute-bootstrap.sh` rather than a one-time dashboard
+click. `--check` reports drift without changing anything.
+
+The client half matters as much: omp's `retry.maxDelayMs` defaults to 300 000,
+so it sleeps up to five minutes before giving up on a stated wait. `config/omp.yml`
+caps it at 60 000 and pairs it with a fallback chain
+(`cc/claude-fable-5-1` → `cc/claude-opus-5` → `auto/best-coding`), so a seat-level
+wall becomes a hop, not a nap.
+
 ## Writable-layer patches
 
 Two fixes live in the container's writable layer and are lost on `docker rm` or

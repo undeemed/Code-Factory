@@ -63,3 +63,4 @@ retry:
     - omniroute/auto/best-coding
     default:
     - omniroute/auto/best-coding
+  maxDelayMs: 60000
