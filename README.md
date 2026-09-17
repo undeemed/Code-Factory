@@ -1,145 +1,150 @@
-# Code Factory
+# ⚡ Code Factory
 
-Rebuild the coding environment around Herdr, Firstmate, OMP, Pi, and their supporting tools on a fresh Ubuntu machine. Native Ansible provisioning, an isolated Docker worker, strict configuration schemas, and reviewed version locks live together here.
+> Reproducible AI-agent development environment on a fresh Ubuntu machine. One command to go from bare metal to a fully wired Herdr + Firstmate + OMP coding fleet.
 
-**IaC choice: Ansible for the host; Docker Compose for workloads.** [Research and tradeoffs](docs/architecture.md) explain why Nix, chezmoi, and OpenTofu are not additional requirements.
+Native Ansible provisioning. Pinned toolchain. Strict configuration schemas. Reviewed version locks. No Nix, no chezmoi, no cloud dependencies.
+
+## Why
+
+AI coding agents work best when their environment is deterministic and their sessions survive reboots. Code Factory provisions an Ubuntu host with:
+
+- **Herdr** terminal workspace — pane management, presentation spaces, agent-aware desktops
+- **Firstmate** fleet orchestrator — task dispatch, spawn memory floor, brief-rule enforcement
+- **OMP/Pi** agent harness — model roles, mnemopi memory, chrome-devtools-axi browser integration
+- **Fleet guards** — one shared Supabase stack, Docker event guard, browser tier ladder, dev-server reaper, session cookie sync
+- **Pinned toolchain** — Node 24, Bun 1.4, uv, Rust 1.97, GitHub CLI, no-mistakes, treehouse — every binary sha256-locked in `toolchain.lock.json`
+
+Not copied: credentials, browser profiles, account sessions, agent history, live pane/task state, private project working trees, database volumes. See [security boundaries](docs/security.md).
+
+## Quick start
+
+Ubuntu 24.04 or 26.04, x86_64 or aarch64. Non-root account with sudo.
+
+```bash
+# 1. Authenticate GitHub (needed for private repos and gh-axi)
+gh auth login
+
+# 2. Clone
+git clone https://github.com/undeemed/Code-Factory.git
+cd Code-Factory
+
+# 3. Bootstrap pinned tooling (uv, Node, Bun, Rust, etc.)
+./bootstrap.sh
+
+# 4. Review and edit the host config
+./factory init              # creates .local/host.yml (gitignored)
+vim .local/host.yml         # adjust profiles, user, paths
+
+# 5. Preview (check mode, no changes)
+./factory plan
+
+# 6. Apply
+./factory apply
+```
+
+`plan` is Ansible check mode — it reports what would change but makes no mutations. `apply` is the explicit state-changing step and may request sudo.
 
 ## What gets reproduced
 
 - Herdr 0.9.0 with captured UI preferences and one canonical, versioned user-service executable.
-- Node 24.19.0, Bun 1.4.0, uv 0.12.5, Rust 1.97.1, GitHub CLI 2.97.0, no-mistakes 1.48.0, and treehouse 2.1.1.
-- Locked OMP 18.1.13, Pi 0.84.2, Codex, AXI tools, and pnpm.
-- Safe OMP/Pi presentation and model-role settings. Every OMP model role resolves to an OmniRoute combo named after one exact model, generated from the running router by `scripts/sync_omniroute_models.py`; see [model selection](docs/omniroute-models.md).
-- Pinned Firstmate source, its gitignored dispatch settings, and Herdr backend selection. No autonomous fleet restore or outward GitHub actions run during setup.
-- Guarded native browser pruning: five-minute checks, two hours of observed inactivity, active-request and persistent-profile protection.
-- Optional Docker, Tailscale installation, and a loopback-only single-profile XFCE/VNC desktop.
-- Docker/devcontainer worker plus optional PostgreSQL/Redis development services, with bounded resources and no host credential or Docker-socket mounts.
-- Docker engine defaults merged into `/etc/docker/daemon.json`: `init` (docker-init reaps orphaned children) and `live-restore`.
-- Optional fleet guards: ONE shared local Supabase stack for every swarms-platform lane, a Docker event guard that removes any second stack on creation, automatic `.env.local` seeding into every worktree, a CLI shim, and Firstmate's spawn memory floor. See [fleet guards](docs/fleet-guards.md).
+- Pinned Node 24, Bun 1.4, uv, Rust 1.97, GitHub CLI, no-mistakes, treehouse.
+- OMP 18.x and Pi 0.84.x, Codex, AXI tools, and pnpm.
+- Safe OMP/Pi presentation and model-role settings.
+- Pinned Firstmate source, dispatch settings, and Herdr backend selection.
+- Docker engine defaults: `init` (reap orphaned children) and `live-restore`.
+- **Fleet guards** — optional but recommended for multi-lane agent work:
+  - One shared local Supabase stack (read-only test fixture, event-trigger DDL guard)
+  - Docker event guard (kills rogue stacks on creation)
+  - Browser tier ladder: Obscura (default, Rust CDP engine) → Chrome (pixel-critical fallback) → VNC (human eyes)
+  - Cookie session sync across all three browser tiers
+  - Dev-server reaper (kills idle `next dev` / `tsc` trees)
+  - Spawn memory floor (refuses new lanes when host RAM is low)
+- Optional Tailscale, loopback-only XFCE/VNC desktop, Chrome apt package.
 
-Not copied: credentials, browser profiles, account sessions, agent history, live pane/task state, private project working trees, database volumes, or application-specific deployments. Unsafe agent auto-approval/trust allowlists are not transferred. See [security boundaries](docs/security.md) and [migration/recovery](docs/recovery.md).
+## Configuration
 
-## Fresh Ubuntu host
+`.local/host.yml` is the single source of truth. `./factory init` creates it; `./factory validate` checks it against the JSON schema.
 
-Native targets: Ubuntu 24.04 or 26.04, Linux x86_64 or aarch64. Use a non-root operator account with sudo. The x86_64 container test is the automated reference; ARM assets are separately pinned, not a claim of ARM hardware testing.
-
-Install initial access tooling through the OS, authenticate GitHub, and clone this private repository:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y git gh python3 python3-venv ca-certificates sudo
-
-gh auth login
-gh repo clone undeemed/Code-Factory
-cd Code-Factory
-./bootstrap.sh
-./factory init
+```yaml
+factory:
+  user: coder
+  home: /home/coder
+  workspace: /home/coder/Dev
+  start_services: true
+  enable_linger: true
+  profiles:
+    agents: true          # Chrome autoprune, AXI tools, browser defaults
+    development: true     # Rust, build tools
+    firstmate: true       # Firstmate clone + dispatch settings
+    docker: true          # Docker engine (group membership opt-in separately)
+    fleet_guards: false   # Shared Supabase, browser ladder, session sync
+    tailscale: false      # Daemon only; authenticate separately
+    desktop: false        # XFCE + TigerVNC + noVNC
+  browsers:
+    obscura_version: '0.2.2'
+    obscura_sha256: c1b4548e36549a0228c39c1cc842df425bc7253af2b0a56bd2a538d8ff7e3406
+  fleet:
+    supabase_project_id: swarms-shared
+    fixture_archive: ""   # Path to DB volume tarball for fresh hosts
+  firstmate:
+    url: https://github.com/undeemed/firstmate.git
+    revision: 341e691d...
 ```
 
-Review `.local/host.yml` before applying. `init` selects the current account and its home. It will not overwrite an existing local configuration. All machine-local files under `.local/` are ignored by Git.
+All profiles default to `false` except `agents` and `development`. The recipe refuses conflicting unmanaged commands and independently advanced Firstmate checkouts instead of overwriting them. See [docs/](docs/) for architecture, security boundaries, and recovery procedures.
 
-```bash
-$EDITOR .local/host.yml
-./factory validate
-./factory plan
-./factory apply
-./factory doctor
-```
+## Profiles
 
-`plan` is Ansible check mode, not a promise that authentication or external network access works. `apply` is the explicit state-changing step and may request sudo. No provisioning runs merely by cloning, bootstrapping tooling, or opening the repository.
+| Profile | What it installs |
+|---------|-----------------|
+| `agents` | Chrome autoprune, AXI tools, browser env defaults, agent harness config |
+| `development` | Rust toolchain, build essentials, development-mode npm packages |
+| `firstmate` | Pinned Firstmate clone, dispatch/harness config, spawn memory floor |
+| `docker` | Docker engine + Compose v2. Group membership is opt-in (`docker_group_users`). |
+| `fleet_guards` | Shared Supabase stack, Docker event guard, browser tier ladder, session sync, dev-server reaper, env seeder |
+| `tailscale` | Tailscale daemon. Auth is manual. |
+| `desktop` | XFCE + TigerVNC + noVNC. Requires an operator-created VNC password. |
 
-The recipe refuses conflicting unmanaged commands and modified/independently advanced Firstmate checkouts instead of overwriting them. Use a clean operator account for a fresh-device rebuild. Existing agent configuration files are preserved rather than replaced wholesale.
+## Fleet guards
 
-## Authentication and first launch
+The `fleet_guards` profile provisions everything a multi-lane AI agent fleet needs to run without thrashing the host:
 
-Installing software does not grant provider/model access. Log in as the configured operator, then authenticate OMP, Pi, Codex, and GitHub interactively. Recheck model availability under those destination accounts; model-role preferences do not create subscriptions.
+- **Browser ladder** (Obscura → Chrome → VNC) with one shared cookie jar synced every 2 minutes
+- **Shared Supabase** — read-only test fixture, DDL-guarded, one stack per host enforced at the Docker event layer
+- **Dev-server reaper** — kills idle `next dev` / `tsc` trees every 2 minutes
+- **Spawn memory floor** — refuses fresh agent lanes when host RAM is below threshold
 
-```bash
-systemctl --user status herdr.service chrome-autoprune.timer
-herdr
-cd ~/Dev/firstmate
-omp
-```
-
-Adjust the workspace path if the host configuration changed it. Firstmate initializes its own private operational state on first use; this export does not carry the old backlog, charters, or worktrees.
-
-From another device with Herdr and working SSH access:
-
-```bash
-herdr --remote operator@host
-```
-
-Use the real target identity. On headless Macs, do not substitute GUI launches or assume TCC permissions exist. This repository's native host playbook is Linux-only; a Mac can be a remote client or run the isolated worker through its own approved container runtime.
-
-## Optional host profiles
-
-Set these booleans in `.local/host.yml`, validate, then explicitly apply:
-
-- `factory.profiles.docker`: installs the Ubuntu Docker package family. Docker group membership is not granted automatically; use sudo or configure your preferred access policy separately.
-- `factory.profiles.tailscale`: installs the daemon only. Authenticate a fresh node yourself; Tailscale SSH additionally needs tailnet SSH policy. No existing SSH/firewall policy is rewritten.
-- `factory.profiles.desktop`: installs XFCE/TigerVNC/noVNC, then requires an operator-created VNC password before enabling listeners. Run `tigervncpasswd ~/.vnc/passwd` as the operator after package installation, protect it with mode `0600`, and rerun apply. Use an SSH tunnel as well. The browser launcher uses only `~/.vnc-chrome-profile`; sign in afresh, never copy a seed profile.
-- `factory.profiles.firstmate`: clones the pinned public source and writes dispatch preferences. Keep the agents profile enabled with it.
-- `factory.profiles.fleet_guards`: one shared Supabase stack plus the guards that keep it the only one (requires the docker and firstmate profiles). A fresh host needs `factory.fleet.fixture_archive` pointing at a snapshot of the fixture database volume; the play refuses to start an empty stack. Details and the incident that produced this in [docs/fleet-guards.md](docs/fleet-guards.md).
-
-`factory.start_services: false` suppresses user/system service and linger actions for container builds. It does not make a container a full replacement for a native host.
+See [docs/fleet-guards.md](docs/fleet-guards.md) for the incident that motivated it and the full design.
 
 ## Docker worker
 
-Install Docker/Compose on the device running these commands. If its Docker socket requires sudo, prefix the Docker commands accordingly.
+An isolated devcontainer-style Docker image can be built from the same recipe (`factory.start_services: false`). The image carries the pinned toolchain, agent configs, and fleet guards without starting any systemd services, linger, or Docker-in-Docker. See [docs/architecture.md](docs/architecture.md).
+
+## CI
+
+GitHub Actions runs on every push and PR:
+
+- `uv sync` + `pytest` + `ruff`
+- `./factory validate` against the JSON schema
+- Full Docker worker image build + behavior smoke test
+- All actions pinned to immutable commit SHAs (no `@v4` tags)
+
+## Troubleshooting
 
 ```bash
-docker compose --profile worker build worker
-docker compose --profile worker run --rm worker bash
+./factory doctor    # actionable diagnostics
+./factory plan      # preview what apply would change
 ```
 
-The worker is non-root. Its workspace is a named volume, not your entire home directory. Authenticate tools inside the intended environment; do not mount host auth databases or browser profiles. The devcontainer also opens an initially empty named-volume workspace at `/home/coder/Dev`; clone projects there after login. It does not bind or mirror the host checkout. The filtered Code Factory source is available at `/opt/code-factory`.
+Common issues:
+- **`factory_guards` requires `docker` + `firstmate`** — enable both profiles
+- **Empty fixture archive** — the shared DB is a read-only fixture; copy the volume snapshot from the source host
+- **Spawn memory floor** — wait for a lane to finish or raise the threshold in `config/spawn-memory-floor-mb`
 
-Optional data services start with empty named volumes. PostgreSQL needs an explicit private password file before startup:
+## Contributing
 
-```bash
-export CODE_FACTORY_SECRET_DIR="$HOME/.local/state/code-factory/secrets"
-install -d -m 700 "$CODE_FACTORY_SECRET_DIR"
-(umask 077; set -o noclobber; openssl rand -hex 32 > "$CODE_FACTORY_SECRET_DIR/postgres_password")
-docker compose --profile data up -d
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Ports bind to loopback. These are development examples, not copies of existing application databases. `docker compose down` preserves named volumes; do not add `--volumes` unless discarding their data is intentional.
+## License
 
-Create that password once; the command refuses to overwrite it. When using sudo, pass the chosen directory explicitly: `sudo env CODE_FACTORY_SECRET_DIR="$CODE_FACTORY_SECRET_DIR" docker compose --profile data up -d`.
-
-## Configuration and locks
-
-| File | Contract |
-| --- | --- |
-| `config/default.yml` | Full default host document |
-| `.local/host.yml` | Ignored operator-specific host document |
-| `schemas/factory.schema.json` | Allowed host fields/types; unknown fields rejected |
-| `toolchain.lock.json` | Native versions, per-architecture URLs and SHA-256 values |
-| `schemas/toolchain.schema.json` | Artifact lock contract |
-| `tools/npm/package-lock.json` | Exact agent dependency graph and package integrity |
-| `uv.lock` | Provisioning/validation Python dependency graph |
-| `maintenance/requirements.txt` | Hashed private pruner-runtime dependency |
-
-Update locks deliberately. The native installer stages and checks downloads before exposing commands, rejects archive traversal, and does not replace an unmanaged executable. Operating-system packages follow the selected Ubuntu release and security updates rather than a frozen package index.
-
-## Checks and operations
-
-```bash
-./factory validate --config config/default.yml
-uv run ruff check .
-uv run pytest
-docker build --target smoke -t code-factory-smoke .
-docker run --rm --init --memory=4g --cpus=2 code-factory-smoke
-```
-
-The image smoke exercises installed commands, a headless Herdr server, and a second provisioning pass. It does not log in to providers or create browser profiles. CI runs the repository's configured checks.
-
-Browser pruning is native and independent of the checkout after installation:
-
-```bash
-~/.local/share/code-factory/pruner-venv/bin/python ~/.local/bin/chrome-autoprune.py  # dry-run
-journalctl --user -u chrome-autoprune.service
-systemctl --user disable --now chrome-autoprune.timer
-```
-
-Newly discovered sessions get a full observation window; snapshot age alone never triggers a kill. No forced SIGKILL or profile deletion is performed. Pruning idle browsers does not replace build concurrency limits or application-aware storage management.
+[MIT](LICENSE)
