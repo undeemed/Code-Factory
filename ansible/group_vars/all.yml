@@ -214,6 +214,14 @@ factory_omniroute_sync_script: "{{ code_factory_repo }}/scripts/sync_omniroute_m
 factory_omniroute_efforts_cache: "{{ code_factory_repo }}/config/omniroute-efforts.yml"
 factory_omniroute_models_yml: "{{ factory_cfg.home }}/.omp/agent/models.yml"
 
+# Gateway provisioning is opt-in: it needs Docker and it binds a port. The
+# bootstrap is idempotent - an existing container is verified and patched, never
+# rotated - so enabling this on a host that already runs OmniRoute is safe.
+# Secrets are minted into the account's own super.env, never into this repo.
+factory_omniroute_bootstrap: false
+factory_omniroute_bootstrap_script: "{{ code_factory_repo }}/maintenance/omniroute-bootstrap.sh"
+factory_omniroute_container: omniroute
+
 # Firstmate reads these from its own checkout and already gitignores them, so
 # the clone stays clean and no .gitignore is edited.
 factory_firstmate_config_names:

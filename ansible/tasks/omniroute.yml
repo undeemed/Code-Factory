@@ -1,0 +1,51 @@
+---
+# OmniRoute gateway: the AI router every OMP model role points at.
+#
+# Opt-in (`factory_omniroute_bootstrap`), because it needs Docker and it binds a
+# port. The bootstrap script is idempotent: an existing container is verified and
+# patched, never rotated, so re-running the recipe cannot invalidate live API
+# keys or the dashboard password. Secrets are minted into the account's own
+# super.env, never into this repository.
+
+- name: Check for an existing OmniRoute container
+  ansible.builtin.command:
+    argv: [docker, inspect, "{{ factory_omniroute_container }}"]
+  become: true
+  register: factory_omniroute_present
+  changed_when: false
+  failed_when: false
+
+- name: Provision or verify OmniRoute
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ factory_omniroute_bootstrap_script }}"
+  become: true
+  become_user: "{{ factory_cfg.user }}"
+  register: factory_omniroute_bootstrap_run
+  changed_when: factory_omniroute_present.rc != 0
+  failed_when: false
+
+- name: Report the OmniRoute bootstrap outcome
+  ansible.builtin.debug:
+    msg: >-
+      {{ (factory_omniroute_bootstrap_run.stdout_lines | default([]))[-3:]
+         | default(['omniroute bootstrap produced no output'], true) | join(' | ') }}
+
+# The chat-admission and heap settings only reach the process through container
+# env, so drift here is silent until a large-context turn 503s. Surface it.
+- name: Verify the OmniRoute admission configuration
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ factory_omniroute_bootstrap_script }}"
+      - --check
+  become: true
+  become_user: "{{ factory_cfg.user }}"
+  register: factory_omniroute_check
+  changed_when: false
+  failed_when: false
+
+- name: Report the OmniRoute admission configuration
+  ansible.builtin.debug:
+    msg: "{{ factory_omniroute_check.stdout_lines | default(['unavailable']) }}"

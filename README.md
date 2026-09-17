@@ -116,6 +116,41 @@ The `fleet_guards` profile provisions everything a multi-lane AI agent fleet nee
 
 See [docs/fleet-guards.md](docs/fleet-guards.md) for the incident that motivated it and the full design.
 
+## OmniRoute gateway
+
+Every OMP model role routes through OmniRoute, so the gateway is part of the
+recipe rather than a hand-built side service. Enable it with
+`factory_omniroute_bootstrap: true` (needs the `docker` profile):
+
+```bash
+maintenance/omniroute-bootstrap.sh            # create if absent, else verify + patch
+maintenance/omniroute-bootstrap.sh --recreate # replace the container (env changes)
+maintenance/omniroute-bootstrap.sh --check    # report configuration drift
+```
+
+It is idempotent: an existing container is verified and patched, never rotated,
+so a re-run cannot invalidate live API keys or the dashboard password. Secrets
+are minted into the account's own `super.env`; none live in this repository.
+
+The bootstrap owns three things the shipped image gets wrong for a coding fleet:
+
+- **Chat-admission headroom.** By default one "heavy" request (≥32k estimated
+  tokens) may be in flight router-wide, so every large-context agent turn
+  serializes and the losers get `503 chat_admission_busy`. The heavy bar moves to
+  45k and the lease count to 6, with the node heap raised to match — the gate
+  exists to protect that heap, so the two move together.
+- **Two writable-layer patches**, re-applied automatically because `docker rm`
+  and image pulls discard them: keeping `system` as `system` in the
+  chat→Responses translation, and keeping the pinned `claude-cli` identity in
+  step with the installed CLI.
+- **The model list**, regenerated from the running router by
+  `scripts/sync_omniroute_models.py` instead of hand-maintained.
+
+[docs/omniroute-resilience.md](docs/omniroute-resilience.md) maps each error
+string to the gate that produced it — three of them impersonate an upstream rate
+limit — and [docs/omniroute-models.md](docs/omniroute-models.md) covers model
+selection.
+
 ## Docker worker
 
 An isolated devcontainer-style Docker image can be built from the same recipe (`factory.start_services: false`). The image carries the pinned toolchain, agent configs, and fleet guards without starting any systemd services, linger, or Docker-in-Docker. See [docs/architecture.md](docs/architecture.md).

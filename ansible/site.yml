@@ -91,6 +91,14 @@
       when: factory_cfg.profiles.docker | bool
       tags: [docker]
 
+    - name: OmniRoute gateway that every OMP model role routes through
+      ansible.builtin.import_tasks: tasks/omniroute.yml
+      when:
+        - factory_account_ready | bool
+        - factory_cfg.profiles.docker | bool
+        - factory_omniroute_bootstrap | bool
+      tags: [omniroute]
+
     - name: Fleet guards - one shared Supabase stack, Docker event guard, worktree env seeding
       ansible.builtin.import_tasks: tasks/fleet_guards.yml
       when:

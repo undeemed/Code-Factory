@@ -139,19 +139,26 @@ activates the connection as a side effect.
 
 ## Current configuration
 
-Container env (`maintenance/omniroute-recreate.sh` owns these):
+Container env (`maintenance/omniroute-bootstrap.sh` owns these):
 
 ```
 OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT        1     -> 6
-OMNIROUTE_CHAT_HEAVY_ESTIMATED_TOKENS     32000 -> 128000
+OMNIROUTE_CHAT_HEAVY_ESTIMATED_TOKENS     32000 -> 45000
 OMNIROUTE_CHAT_ADMISSION_QUEUE_MS         2000  -> 20000
 OMNIROUTE_CHAT_ADMISSION_MAX_QUEUED_BYTES 4MB   -> 32MB
 OMNIROUTE_MEMORY_MB / --max-old-space-size 1024 -> 3072
 ```
 
-Raising the heavy bar to 128 k is the load-bearing change: ordinary agent turns
-no longer take a lease at all, and the gate is reserved for the genuinely huge
-bodies it was built for. Heap sat at 697 MiB of 3 GB under a 6-way heavy burst.
+The heavy bar sits at 45 k **inside** the 26-57 k band real turns occupy, not
+above it. That is deliberate: ordinary turns pass freely, while the larger half
+still takes a lease, so the gate keeps bounding concurrent huge-context bursts
+against the heap. Raising it past the traffic it is meant to bound (128 k was
+tried) removes admission control from the fleet's actual requests and trades
+503s for an OOM risk.
+
+Measured under load: 8 concurrent ~50 k-token requests (each above the bar, so 2
+waited on the 6-lease gate and passed inside the 20 s window) all served, with
+heap peaking at **920 MiB of the 3 GB ceiling**.
 
 Dashboard/DB settings:
 
@@ -194,13 +201,12 @@ an image pull, but survive `docker restart`:
   `claude-cli` identity in step with the installed CLI; a stale pin earns
   `403 Request not allowed` on its own.
 
-`maintenance/omniroute-recreate.sh` recreates the container with the env above
-and re-applies both, then verifies. Run it after any `docker pull`; verify any
-time with:
+`maintenance/omniroute-bootstrap.sh` provisions or recreates the container with
+the env above and re-applies both, then verifies. Run `--recreate` after any
+`docker pull`; verify any time with:
 
 ```bash
-maintenance/omniroute-system-role-patch.sh omniroute --check
-maintenance/omniroute-claude-client-version.sh omniroute --check
+maintenance/omniroute-bootstrap.sh --check
 ```
 
 ## Diagnostic recipes
