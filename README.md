@@ -10,7 +10,7 @@ AI coding agents work best when their environment is deterministic and their ses
 
 - **Herdr** terminal workspace — pane management, presentation spaces, agent-aware desktops
 - **Firstmate** fleet orchestrator — task dispatch, spawn memory floor, brief-rule enforcement
-- **OMP/Pi** agent harness — model roles, mnemopi memory, chrome-devtools-axi browser integration
+- **OMP/Pi** agent harness — model roles, mnemopi memory, chrome-devtools-axi browser integration. Every OMP model role resolves to an OmniRoute option generated from the running router by `scripts/sync_omniroute_models.py`; see [model selection](docs/omniroute-models.md) and, when a model "never works", [resilience gates](docs/omniroute-resilience.md)
 - **Fleet guards** — one shared Supabase stack, Docker event guard, browser tier ladder, dev-server reaper, session cookie sync
 - **Pinned toolchain** — Node 24, Bun 1.4, uv, Rust 1.97, GitHub CLI, no-mistakes, treehouse — every binary sha256-locked in `toolchain.lock.json`
 

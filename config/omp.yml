@@ -1,16 +1,16 @@
 modelRoles:
-  designer: anthropic/claude-fable-5-1:high
+  designer: omniroute/cc/claude-fable-5-1:high
   smol: omniroute/mimo-v2.5-pro:low
-  slow: anthropic/claude-opus-5:xhigh
+  slow: omniroute/cc/claude-opus-5:xhigh
   vision: omniroute/sonnet-5:high
-  plan: anthropic/claude-fable-5-1:xhigh
+  plan: omniroute/cc/claude-fable-5-1:xhigh
   commit: omniroute/mimo-v2.5-pro:low
   tiny: omniroute/mimo-v2.5-pro:low
   advisor: omniroute/sonnet-5:high
   Kimi: kimi-code/k3
-  task: anthropic/claude-opus-5:xhigh
-  subagent: anthropic/claude-opus-5:xhigh
-  default: anthropic/claude-opus-5:xhigh
+  task: omniroute/cc/claude-opus-5:xhigh
+  subagent: omniroute/cc/claude-opus-5:xhigh
+  default: omniroute/cc/claude-opus-5:xhigh
 theme:
   dark: dark-rose-pine
 symbolPreset: nerd
