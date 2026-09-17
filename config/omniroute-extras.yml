@@ -8,5 +8,13 @@
 # which every omp turn is, while the direct id streams reliably (4/4 verified
 # 2026-09-17). See docs/omniroute-models.md.
 models:
+  # Orphan panes (anything that is not a Firstmate crew or secondmate lane) run
+  # on coding-weighted auto routing rather than a pinned model, per the captain
+  # 2026-09-17. `auto/best-coding` scores every connected provider, free tier
+  # included; `auto/coding:pro` restricts the pool to premium models.
+  - id: auto/best-coding
+    name: Best coding (auto-routed across every provider)
+  - id: auto/coding:pro
+    name: Best coding, premium pool only
   - id: cc/claude-fable-5
     name: Claude Fable 5 (all Claude accounts)

@@ -2,6 +2,18 @@
 # Regenerate with scripts/sync_omniroute_models.py --update-cache; never hand-edit:
 # the advertised capabilities.effort_tiers disagree with what the upstreams take.
 efforts:
+  auto/best-coding:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
+  auto/coding:pro:
+  - low
+  - medium
+  - high
+  - xhigh
+  - max
   balanced:
   - low
   - medium
