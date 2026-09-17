@@ -74,10 +74,9 @@ for (let i = 0; i < args.length; i++) {
 		if (eq > 0) tiers.push({ name: args[i].slice(0, eq), ep: parseEndpoint(args[i].slice(eq + 1)) });
 	}
 }
-mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+mkdirSync(stateDir, { recursive: true, mode: 0o755 });
 
 // Engines disagree on the leading dot (Obscura reports ".github.com" back as
-// "github.com"), so the key ignores it; the canonical entry keeps whichever
 // form it first saw, dotted preferred.
 const keyOf = (c: Cookie) => `${c.domain.replace(/^\./, "").toLowerCase()}|${c.path}|${c.name}`;
 const loadJar = (file: string): Jar => (existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Jar) : {});
