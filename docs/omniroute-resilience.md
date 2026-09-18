@@ -150,9 +150,31 @@ pipeline, so the body is provably byte-identical.
 The caching damage was smaller than first assumed, because
 `preserveSystemPromptMode` was already `whenNoCache` and therefore kept the
 cacheable prefix intact: `GET /api/usage/cache-health` now reads
-`verdict: healthy`, write/read ratio **0.146** against 979 heavy writes. The
-trade was still bad — ~0.28 % saved for a nonzero chance of an empty stream on a
-tool-heavy turn — which is why the two lexical engines are off rather than tuned.
+`verdict: healthy`, write/read ratio **0.146** against 979 heavy writes.
+
+### `caveman` and `rtk` do not have to be off
+
+Once Claude is in `exclusions`, the engines cannot reach the lane that broke, so
+they were re-enabled and tested rather than left off on reputation. The exact
+shape that killed Claude — system prompt plus three tool schemas plus a verbose
+user turn — sent three times to `openrouter/qwen/qwen3.8-27b:free`:
+
+```
+run 1..3: content length 0, finish_reason "tool_calls", no error
+2416 -> 2408 tokens (0.33% saved, techniques: caveman-rules,live-zone-prefix-reuse)
+```
+
+`content length 0` with `finish_reason: "tool_calls"` is **correct** — the model
+chose a tool call, so there is no text. That is not the failure mode; the failure
+had no `finish_reason` at all. 3/3 clean, so both engines stay **on** for
+non-excluded providers.
+
+Known limit of that test: it exercised the *shape* (3 tool schemas, 2.4k tokens),
+not the *scale* that originally broke (13 schemas, 26–57k tokens). The tripwire
+is the empty-content counter in the diagnostic recipes below; if it moves, scope
+the offending provider into `exclusions` rather than disabling the engine
+globally. At 0.33 % the savings are close to noise either way — the reason to
+leave them on is that they are measurably harmless, not that they pay.
 
 ## 4. Auto-ban on 403, and the settings that feed it
 
@@ -211,9 +233,10 @@ Dashboard/DB settings:
   req/min ceiling), `maxWaitMs: 10000` (was 30 000)
 - compression: master `enabled: true`, `preserveSystemPromptMode: always`,
   `exclusions: ["claude/*", "claude-*", "cc/*"]`, engines on:
-  `session-dedup`, `ccr`, `lite`, `codex-responses`, `headroom`; engines off:
-  `caveman`, `rtk` (the two lexical rewriters). `defaultMode`/`autoTriggerMode`
-  are left `off` but are **not** what stops it — see section 3.
+  `session-dedup`, `ccr`, `lite`, `rtk`, `codex-responses`, `headroom`,
+  `caveman`; engines off: `relevance`, `aggressive`, `llmlingua`, `ultra`,
+  `omniglyph`. `defaultMode`/`autoTriggerMode` are left `off` but are **not**
+  what stops it — see section 3.
 
 ## The real Claude ceiling
 
