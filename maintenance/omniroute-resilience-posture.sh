@@ -56,10 +56,14 @@ mode=${1:-assert}
 # Providers whose OAuth seats keep the local gate ON behind a per-seat cap,
 # because their real ceiling is concurrency and overrunning it earns a ban.
 CAPPED_PROVIDERS=${OMNIROUTE_CAPPED_PROVIDERS:-claude}
-SEAT_CONCURRENCY=${OMNIROUTE_SEAT_CONCURRENCY:-3}
-SEAT_QUEUE_MS=${OMNIROUTE_SEAT_QUEUE_MS:-12000}
+# 5, not 3: the measured wall is roughly 300k tokens in flight per seat
+# (6 x 45k passed, 8 x 45k and 3 x 140k did not), and real turns are 26-57k, so
+# 5 concurrent sits under it while 3 was leaving headroom unused.
+SEAT_CONCURRENCY=${OMNIROUTE_SEAT_CONCURRENCY:-5}
+SEAT_QUEUE_MS=${OMNIROUTE_SEAT_QUEUE_MS:-10000}
 # Quiet period a seat must observe before its stale local flag is cleared.
-SEAT_REVIVE_GRACE_SEC=${OMNIROUTE_SEAT_REVIVE_GRACE_SEC:-300}
+# 60s, not 300s: the flag is local and costs a whole seat, so recover fast.
+SEAT_REVIVE_GRACE_SEC=${OMNIROUTE_SEAT_REVIVE_GRACE_SEC:-60}
 
 log() { printf '== %s\n' "$*"; }
 
@@ -87,8 +91,12 @@ read -r -d '' desired <<'JSON' || true
     "oauth":  { "baseCooldownMs": 5000, "useUpstreamRetryHints": true, "maxBackoffSteps": 4 },
     "apikey": { "baseCooldownMs": 3000, "useUpstreamRetryHints": true, "maxBackoffSteps": 5 }
   },
-  "waitForCooldown":   { "enabled": true, "maxRetries": 2, "maxRetryWaitSec": 8 },
-  "comboCooldownWait": { "enabled": true, "maxWaitMs": 12000, "maxAttempts": 3, "budgetMs": 40000 }
+  "requestQueue": { "minTimeBetweenRequestsMs": 0, "maxWaitMs": 10000 },
+  "providerBreaker": {
+    "oauth": { "failureThreshold": 12, "degradationThreshold": 8, "resetTimeoutMs": 20000 }
+  },
+  "waitForCooldown":   { "enabled": true, "maxRetries": 2, "maxRetryWaitSec": 4 },
+  "comboCooldownWait": { "enabled": true, "maxWaitMs": 6000, "maxAttempts": 3, "budgetMs": 20000 }
 }
 JSON
 
@@ -235,8 +243,12 @@ log "reviving OAuth seats parked on a stale local flag"
 revived=0
 while read -r cid provider name; do
 	[ -n "$cid" ] || continue
+	# Clear the WHOLE terminal-state set, not just testStatus: a leftover
+	# lastErrorType of "forbidden" re-derives the ban on the next restart, so
+	# a partial clear looks like it worked until the container bounces.
 	api -X PATCH -H 'Content-Type: application/json' \
-		-d '{"isActive":true,"testStatus":"active","errorCode":null,"lastError":null}' \
+		-d '{"isActive":true,"testStatus":"active","errorCode":null,"lastError":null,
+		     "lastErrorType":null,"lastErrorAt":null,"backoffLevel":0,"rateLimitedUntil":null}' \
 		"$BASE/api/providers/$cid" >/dev/null
 	printf '   revived %s (%s)\n' "$name" "$provider"
 	revived=$((revived + 1))

@@ -163,9 +163,14 @@ heap peaking at **920 MiB of the 3 GB ceiling**.
 Dashboard/DB settings:
 
 - Claude seats: `rateLimitProtection: true` with a per-seat cap
-  (`maxConcurrent: 3`, `rateLimitOverrides: {maxConcurrent: 3, maxWaitMs: 12000}`),
+  (`maxConcurrent: 5`, `rateLimitOverrides: {maxConcurrent: 5, maxWaitMs: 10000}`),
   `disableCooling: false`
-- `modelLockout.errorCodes`: `[403, 404, 429, 503]`
+- `modelLockout.errorCodes`: `[404]` — was `[403, 404, 429, 503]`. A 429 is a
+  token bucket that refills continuously and a 403 is usually our own burst, so
+  neither says the *model* is unusable; only a genuinely absent model does. This
+  lives in `/api/settings`, not `/api/resilience`.
+- `requestQueue`: `minTimeBetweenRequestsMs: 0` (was 350, an artificial ~171
+  req/min ceiling), `maxWaitMs: 10000` (was 30 000)
 - compression: `caveman` and `rtk` engines disabled, `defaultMode: off`,
   `autoTriggerMode: off`
 
@@ -250,10 +255,12 @@ waitForCooldown            enabled  maxRetries 2   maxRetryWaitSec 8
 comboCooldownWait          enabled  maxWaitMs 12000  maxAttempts 3  budgetMs 40000
 rateLimitProtection        off on every OAuth seat except capped providers
                            (`claude`), which keep it on behind the per-seat cap
-per-seat cap                maxConcurrent 3  maxWaitMs 12000  on each capped seat
-stale local flags           cleared on OAuth seats that are `banned`/`unavailable`
-                            with no cooldown left and quiet for 300 s
-                            (`OMNIROUTE_SEAT_REVIVE_GRACE_SEC`)
+per-seat cap                maxConcurrent 5  maxWaitMs 10000  on each capped seat
+requestQueue               minTimeBetweenRequestsMs 0  maxWaitMs 10000
+providerBreaker.oauth      failureThreshold 12  degradationThreshold 8  resetTimeoutMs 20000
+stale local flags          cleared on OAuth seats that are `banned`/`unavailable`
+                           with no cooldown left and quiet for 60 s
+                           (`OMNIROUTE_SEAT_REVIVE_GRACE_SEC`)
 ```
 
 Honouring the hint is what makes the wait short, which is the opposite of how it
@@ -305,6 +312,58 @@ seat cannot hit them:
   API-key connection that hits a monthly cap will churn its ladder pointlessly.
 - ITPM is estimated at request start and reconciled afterwards, so nothing local
   can pre-compute it.
+
+## Traps found while loosening the gates (2026-09-18)
+
+**A partial ban clear looks like it worked until the container bounces.** The
+revival PATCH originally cleared `testStatus`, `isActive`, `errorCode` and
+`lastError` — and the seat came back healthy and served traffic. On the next
+restart it was `banned` again, with `lastErrorAt` still pointing at the *original*
+failure and `lastErrorType: forbidden` left behind. The terminal state is
+re-derived from those fields at startup, so revival MUST clear the whole set:
+`testStatus`, `isActive`, `errorCode`, `lastError`, `lastErrorType`,
+`lastErrorAt`, `backoffLevel`, `rateLimitedUntil`. Verified: after the full
+clear, both seats survived a restart *and* the 30 s-delayed
+`[CredentialHealth] Testing 6/6 connections` pass with `lastErrorType: null`.
+
+**An empty Claude pool answers 401, not 503.** With one seat banned and the other
+still coming up after a restart, ten concurrent requests all returned `401` in
+under 200 ms while the log said `[claude] All 1 connection(s) banned by upstream`.
+Nothing reached Anthropic. A burst of 401s straight after a restart is a local
+pool-empty artifact — check `lastErrorAt` before believing an upstream cause: if
+the stamp predates the restart, no new upstream error happened.
+
+**`quotaPreflight` cannot be enabled on this build, and would not help.** Three
+independent reasons: `/api/resilience/route.ts` has no `quotaPreflight` branch in
+either the GET projection or the PATCH allow-list, so the PATCH is silently
+dropped; `autoCombo/*` never references it, so the "master switch for the
+auto-routing quota cutoff" is not wired into the scorer; and there is **no quota
+fetcher registered for `xiaomi-mimo-token-plan`** (registered: `agentrouter`,
+`bailian-coding-plan`, `codex`, `crof`, `deepseek`, `firecrawl`, `freemodel-dev`,
+`grok-cli`, `grok-web`, `openrouter`, `qwen-cloud-token-plan`, `v0-vercel`), so
+the router cannot read the remaining quota of the one provider that is actually
+429ing. Note `/api/settings` and `/api/resilience` both omit keys they otherwise
+accept — absence from a GET is not absence from the schema.
+
+**There is no client-side lever that raises an Anthropic limit.** Limits are
+computed server-side per organization (*"Limits are set at the organization
+level"*), and tier placement is automatic from usage history. The pinned
+`claude-cli` identity changes **admission** — a stale pin earns
+`403 Request not allowed`, a matching one is accepted — but the seat hit exactly
+the same concurrency ceiling either way. So identity shaping cannot buy quota,
+and there is no artifact to copy from a higher-throughput setup. The levers that
+do move throughput are all legitimate: prompt caching (cache reads are exempt
+from ITPM, worth ~5x at a good hit rate — and `cache-health` read `degraded`,
+write/read ratio 1.00, until the prompt rewriters were disabled), a second seat
+with its own window, a Console account for burst work with no session windows,
+and the Batch API for anything non-interactive.
+
+**Cap 5 is measured, not guessed.** 10 concurrent 400-token requests against one
+seat held at exactly `executing: 5`, all ten returned 200, and both seats stayed
+`active` with no error code. The envelope it sits inside is the earlier
+measurement: ~300k tokens in flight per seat (6 × 45k passed, 8 × 45k and
+3 × 140k did not). If 403s reappear in normal traffic, drop
+`OMNIROUTE_SEAT_CONCURRENCY` back toward 3 rather than removing the cap.
 
 ## Writable-layer patches
 
