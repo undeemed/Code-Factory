@@ -111,10 +111,48 @@ reads bill at roughly a tenth of input. `GET /api/usage/cache-health` agreed:
 `verdict: degraded`, write/read ratio 1.00, 122 heavy-write calls carrying ~100 %
 of write tokens. Turning the rewriters off should *lower* spend, not raise it.
 
-Engines are toggled independently of `stackedPipeline` — removing `caveman` from
-the pipeline while `engines.caveman.enabled` stays true keeps applying it (the
-log still listed `caveman-rules`). Disable the engine, not just the pipeline
-entry.
+**`defaultMode: off` does not disable compression, and this doc was wrong about
+it until 2026-09-18.** The effective plan is *derived from the enabled engines*,
+not from `defaultMode` — `services/compression/deriveDefaultPlan.ts`:
+
+```
+1. masterEnabled=false OR no engines on → { mode:"off", stackedPipeline:[] }
+3. Otherwise → { mode:"stacked", stackedPipeline: enabled engines by stackPriority }
+```
+
+So with `enabled: true` and `engines.caveman`/`engines.rtk` still `true`, every
+turn ran `mode: "stacked"` while the settings read `defaultMode: "off"`. Proof on
+the live dispatch path at 00:32 on 2026-09-18, five hours after the engines were
+believed off:
+
+```
+COMPRESSION Prompt compressed (stacked): 2138 -> 2132 tokens (0.28% saved, techniques: caveman-rules)
+```
+
+Turn off the **engines** (or the master switch, or exclude the target); a mode is
+not a kill switch.
+
+Two API traps while doing it:
+
+- `/api/settings/compression` has **GET and PUT only**. A PATCH is accepted at
+  the socket and silently changes nothing — it reported the old values back.
+  Read, modify, PUT the whole object.
+- `/api/compression/preview` **ignores `exclusions`** — it is a raw engine tool
+  and reported `caveman-rules` for an excluded Claude payload. Verify exclusions
+  on the real dispatch path instead: send a request and check for the absence of
+  a `COMPRESSION` log line.
+
+`exclusions` patterns match case-insensitively against the bare model id **and**
+the `provider/model` composite, with `*` as the only wildcard
+(`services/compression/exclusions.ts`). An excluded target bypasses the whole
+pipeline, so the body is provably byte-identical.
+
+The caching damage was smaller than first assumed, because
+`preserveSystemPromptMode` was already `whenNoCache` and therefore kept the
+cacheable prefix intact: `GET /api/usage/cache-health` now reads
+`verdict: healthy`, write/read ratio **0.146** against 979 heavy writes. The
+trade was still bad — ~0.28 % saved for a nonzero chance of an empty stream on a
+tool-heavy turn — which is why the two lexical engines are off rather than tuned.
 
 ## 4. Auto-ban on 403, and the settings that feed it
 
@@ -171,8 +209,11 @@ Dashboard/DB settings:
   lives in `/api/settings`, not `/api/resilience`.
 - `requestQueue`: `minTimeBetweenRequestsMs: 0` (was 350, an artificial ~171
   req/min ceiling), `maxWaitMs: 10000` (was 30 000)
-- compression: `caveman` and `rtk` engines disabled, `defaultMode: off`,
-  `autoTriggerMode: off`
+- compression: master `enabled: true`, `preserveSystemPromptMode: always`,
+  `exclusions: ["claude/*", "claude-*", "cc/*"]`, engines on:
+  `session-dedup`, `ccr`, `lite`, `codex-responses`, `headroom`; engines off:
+  `caveman`, `rtk` (the two lexical rewriters). `defaultMode`/`autoTriggerMode`
+  are left `off` but are **not** what stops it — see section 3.
 
 ## The real Claude ceiling
 
